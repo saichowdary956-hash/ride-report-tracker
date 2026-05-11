@@ -486,6 +486,8 @@ def connect_postgres_tracker_db():
         )
         """
     )
+    db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_position ON daily_rows (position)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     db.commit()
     return db
 
@@ -497,6 +499,9 @@ def connect_tracker_db(output_dir):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS daily_rows (
@@ -527,6 +532,8 @@ def connect_tracker_db(output_dir):
         )
         """
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_position ON daily_rows (position)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     conn.commit()
     return conn
 
@@ -688,6 +695,34 @@ def add_database_row(output_dir, row_data):
         conn.commit()
 
 
+def upsert_rows_to_database(output_dir, rows, action="upsert", vehicle=None):
+    if not rows:
+        return 0
+    now = datetime.now().isoformat(timespec="seconds")
+    count = 0
+    with connect_tracker_db(output_dir) as conn:
+        for row in rows:
+            if vehicle is not None:
+                row["Vehicle"] = vehicle
+            row_id = daily_row_id(row)
+            current = conn.execute("SELECT position FROM daily_rows WHERE id = ?", (row_id,)).fetchone()
+            if current:
+                position = current["position"]
+            else:
+                position = conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM daily_rows").fetchone()["next_pos"]
+            conn.execute(
+                upsert_daily_row_sql(),
+                (row_id, position, json.dumps(row, default=str), now),
+            )
+            count += 1
+        conn.execute(
+            "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+            (action, None, f"{count} row(s)", now),
+        )
+        conn.commit()
+    return count
+
+
 def delete_database_row(output_dir, row_id):
     now = datetime.now().isoformat(timespec="seconds")
     with connect_tracker_db(output_dir) as conn:
@@ -701,16 +736,20 @@ def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None)
     if not source_set:
         return 0
     rows = load_rows_from_database(output_dir)
-    kept_rows = []
     deleted = 0
-    for row in rows:
-        row_source = str(row.get("Source File") or "").strip()
-        row.pop("_id", None)
-        if row_source in source_set and (vehicle is None or row_vehicle(row) == vehicle):
-            deleted += 1
-        else:
-            kept_rows.append(row)
-    save_rows_to_database(output_dir, kept_rows, action="delete-source-files")
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect_tracker_db(output_dir) as conn:
+        for row in rows:
+            row_id = row.get("_id")
+            row_source = str(row.get("Source File") or "").strip()
+            if row_id and row_source in source_set and (vehicle is None or row_vehicle(row) == vehicle):
+                conn.execute("DELETE FROM daily_rows WHERE id = ?", (row_id,))
+                deleted += 1
+        conn.execute(
+            "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+            ("delete-source-files", None, f"{deleted} row(s)", now),
+        )
+        conn.commit()
     return deleted
 
 
@@ -1455,21 +1494,14 @@ def process_reports(input_path, output_dir, tracker_name="daily_tracker.xlsx", f
     new_rows = daily_rows_from_data(list(batch_rides.values()), batch_category_rows)
     for row in new_rows:
         row["Vehicle"] = vehicle
-    new_ids = {daily_row_id(row) for row in new_rows}
-
-    existing_rows = [] if fresh else load_rows_from_database(output_dir, vehicle=vehicle)
-    merged_rows = []
-    for row in existing_rows:
-        if row.get("_id") not in new_ids:
-            row.pop("_id", None)
-            row["Vehicle"] = vehicle
-            merged_rows.append(row)
     for row in new_rows:
         row.pop("_id", None)
         row["Vehicle"] = vehicle
-        merged_rows.append(row)
 
-    if not processed and not merged_rows:
+    if fresh:
+        save_rows_to_database(output_dir, [], action="fresh-upload-clear", vehicle=vehicle)
+
+    if not processed:
         return {
             "processed": processed,
             "skipped": skipped,
@@ -1477,7 +1509,7 @@ def process_reports(input_path, output_dir, tracker_name="daily_tracker.xlsx", f
             "message": "No valid RideReport CSV files found.",
         }
 
-    save_rows_to_database(output_dir, merged_rows, action="process-csv", vehicle=vehicle)
+    upsert_rows_to_database(output_dir, new_rows, action="process-csv", vehicle=vehicle)
     try:
         build_tracker_from_daily_rows(tracker_path, load_rows_from_database(output_dir, vehicle=vehicle))
     except PermissionError:

@@ -1,6 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 import argparse
 import html
 import mimetypes
@@ -263,7 +263,7 @@ def progress_table_html(rows, total_planned_hours):
     )
 
 
-def csv_files_table_html(rows, vehicle=None):
+def csv_files_table_html(rows, vehicle=None, selected_source=""):
     if vehicle is not None:
         rows = [row for row in rows if str(row.get("Vehicle") or "Default").strip() == vehicle]
     if not rows:
@@ -279,14 +279,14 @@ def csv_files_table_html(rows, vehicle=None):
         rows_by_source.setdefault(source, []).append(row)
         if source not in sources:
             sources.append(source)
-    selected = sources[0] if sources else ""
+    selected = selected_source if selected_source in rows_by_source else (sources[0] if sources else "")
     buttons = "".join(
-        f"<button class='csv-select {'active' if source == selected else ''}' type='button' data-source='{html.escape(source)}'>{index}. {html.escape(source)}</button>"
+        f"<a class='csv-select {'active' if source == selected else ''}' href='/?tab=csv-list&vehicle={quote_plus(vehicle or active_vehicle())}&source={quote_plus(source)}'>{index}. {html.escape(source)}</a>"
         for index, source in enumerate(sources, start=1)
     )
     detail_sections = []
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
-    for source in sources:
+    for source in ([selected] if selected else []):
         source_rows = rows_by_source[source]
         body_rows = []
         for row in source_rows:
@@ -297,7 +297,7 @@ def csv_files_table_html(rows, vehicle=None):
             )
         detail_sections.append(
             f"""
-            <div class="csv-detail {'active' if source == selected else ''}" data-source="{html.escape(source)}">
+            <div class="csv-detail active" data-source="{html.escape(source)}">
               <h3>{html.escape(source)}</h3>
               <table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>
             </div>
@@ -383,7 +383,7 @@ def vehicle_selector_html():
     </div>"""
 
 
-def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home"):
+def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source=""):
     processed = processed or []
     skipped = skipped or []
     tracker_rows = current_rows()
@@ -680,7 +680,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       <div class="panel">
         <h2>CSV files list - {html.escape(active_vehicle())}</h2>
         <div class="muted">Only CSV files uploaded for the selected vehicle are shown here.</div>
-        <div class="table-wrap">{csv_files_table_html(tracker_rows, active_vehicle())}</div>
+        <div class="table-wrap">{csv_files_table_html(tracker_rows, active_vehicle(), selected_source)}</div>
       </div>
     </section>
     <section id="progress" class="tab-panel {'active' if active_tab == 'progress' else ''}">
@@ -708,15 +708,6 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         document.getElementById(button.dataset.tab).classList.add('active');
       }});
     }});
-    document.querySelectorAll('.csv-select').forEach((button) => {{
-      button.addEventListener('click', () => {{
-        const source = button.dataset.source;
-        document.querySelectorAll('.csv-select').forEach((item) => item.classList.remove('active'));
-        document.querySelectorAll('.csv-detail').forEach((item) => item.classList.remove('active'));
-        button.classList.add('active');
-        document.querySelectorAll(`.csv-detail[data-source="${{CSS.escape(source)}}"]`).forEach((item) => item.classList.add('active'));
-      }});
-    }});
   </script>
 </body>
 </html>"""
@@ -737,6 +728,8 @@ class Handler(BaseHTTPRequestHandler):
         if query.get("vehicle"):
             vehicle = query.get("vehicle", ["Default"])[0].strip() or "Default"
             set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+        active_tab = query.get("tab", ["home"])[0]
+        selected_source = query.get("source", [""])[0]
         if parsed.path == "/download":
             target = active_tracker_path()
             if not target.exists():
@@ -762,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.respond_html(page(f"Could not open Excel file: {exc}"), status=500)
             return
-        self.respond_html(page())
+        self.respond_html(page(active_tab=active_tab, selected_source=selected_source))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -798,7 +791,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/row/update":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
-                update_database_row(OUTPUT_DIR, row_id, row_from_form(form))
+                row = row_from_form(form)
+                row["Vehicle"] = active_vehicle()
+                update_database_row(OUTPUT_DIR, row_id, row)
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
                 processed = []
                 skipped = []
@@ -817,7 +812,9 @@ class Handler(BaseHTTPRequestHandler):
                 active_tab = "home"
             elif self.path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
-                add_database_row(OUTPUT_DIR, row_from_form(form))
+                row = row_from_form(form)
+                row["Vehicle"] = active_vehicle()
+                add_database_row(OUTPUT_DIR, row)
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
                 processed = []
                 skipped = []
