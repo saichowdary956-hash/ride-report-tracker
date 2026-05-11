@@ -12,6 +12,7 @@ from ride_report_tool import (
     DAILY_TRACKER_COLUMNS,
     add_vehicle,
     add_database_row,
+    count_rows_in_database,
     delete_database_row,
     delete_database_rows_by_source_files,
     database_fallback_reason,
@@ -378,8 +379,8 @@ def vehicle_selector_html():
         f"<option value='{html.escape(vehicle)}' {'selected' if vehicle == current else ''}>{html.escape(vehicle)}</option>"
         for vehicle in vehicles
     )
-    active_rows = load_rows_from_database(OUTPUT_DIR, vehicle=current)
     active_sources = source_files_from_database(OUTPUT_DIR, vehicle=current)
+    active_row_count = count_rows_in_database(OUTPUT_DIR, vehicle=current)
     return f"""
     <div class="vehicle-bar">
       <form action="/vehicle/select" method="post" id="vehicle-select-form">
@@ -401,7 +402,7 @@ def vehicle_selector_html():
       <div class="vehicle-status">
         <strong>Active vehicle: {html.escape(current)}</strong>
         <span>{len(active_sources)} CSV file(s)</span>
-        <span>{len(active_rows)} tracker row(s)</span>
+        <span>{active_row_count} tracker row(s)</span>
         <span>{html.escape(active_tracker_path().name)}</span>
       </div>
     </div>"""

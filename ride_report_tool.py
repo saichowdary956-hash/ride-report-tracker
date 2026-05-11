@@ -425,10 +425,13 @@ def database_fallback_reason():
 
 def upsert_daily_row_sql():
     return """
-        INSERT INTO daily_rows (id, position, data_json, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO daily_rows (id, position, vehicle, source_file, drive_id, data_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             position = excluded.position,
+            vehicle = excluded.vehicle,
+            source_file = excluded.source_file,
+            drive_id = excluded.drive_id,
             data_json = excluded.data_json,
             updated_at = excluded.updated_at
     """
@@ -486,11 +489,17 @@ def connect_postgres_tracker_db():
         CREATE TABLE IF NOT EXISTS daily_rows (
             id TEXT PRIMARY KEY,
             position INTEGER NOT NULL,
+            vehicle TEXT,
+            source_file TEXT,
+            drive_id TEXT,
             data_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
     )
+    db.execute("ALTER TABLE daily_rows ADD COLUMN IF NOT EXISTS vehicle TEXT")
+    db.execute("ALTER TABLE daily_rows ADD COLUMN IF NOT EXISTS source_file TEXT")
+    db.execute("ALTER TABLE daily_rows ADD COLUMN IF NOT EXISTS drive_id TEXT")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -511,7 +520,20 @@ def connect_postgres_tracker_db():
         )
         """
     )
+    db.execute(
+        """
+        UPDATE daily_rows
+        SET
+            vehicle = COALESCE(NULLIF(vehicle, ''), COALESCE(NULLIF(data_json::jsonb ->> 'Vehicle', ''), 'Default')),
+            source_file = COALESCE(NULLIF(source_file, ''), data_json::jsonb ->> 'Source File'),
+            drive_id = COALESCE(NULLIF(drive_id, ''), data_json::jsonb ->> 'Drive ID')
+        WHERE vehicle IS NULL OR source_file IS NULL OR drive_id IS NULL
+        """
+    )
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_position ON daily_rows (position)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_position ON daily_rows (vehicle, position)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_source ON daily_rows (vehicle, source_file)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     db.commit()
     return db
@@ -539,11 +561,21 @@ def connect_tracker_db(output_dir):
         CREATE TABLE IF NOT EXISTS daily_rows (
             id TEXT PRIMARY KEY,
             position INTEGER NOT NULL,
+            vehicle TEXT,
+            source_file TEXT,
+            drive_id TEXT,
             data_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
     )
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_rows)").fetchall()}
+    if "vehicle" not in existing_columns:
+        conn.execute("ALTER TABLE daily_rows ADD COLUMN vehicle TEXT")
+    if "source_file" not in existing_columns:
+        conn.execute("ALTER TABLE daily_rows ADD COLUMN source_file TEXT")
+    if "drive_id" not in existing_columns:
+        conn.execute("ALTER TABLE daily_rows ADD COLUMN drive_id TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -564,7 +596,16 @@ def connect_tracker_db(output_dir):
         )
         """
     )
+    for item in conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle IS NULL OR source_file IS NULL OR drive_id IS NULL").fetchall():
+        data = json.loads(item["data_json"])
+        conn.execute(
+            "UPDATE daily_rows SET vehicle = ?, source_file = ?, drive_id = ? WHERE id = ?",
+            (row_vehicle(data), str(data.get("Source File") or "").strip(), str(data.get("Drive ID") or "").strip(), item["id"]),
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_position ON daily_rows (position)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_position ON daily_rows (vehicle, position)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_source ON daily_rows (vehicle, source_file)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     conn.commit()
     return conn
@@ -660,24 +701,28 @@ def row_vehicle(row):
     return str(row.get("Vehicle") or "Default").strip() or "Default"
 
 
+def row_source_file(row):
+    return str(row.get("Source File") or "").strip()
+
+
+def row_drive_id(row):
+    return str(row.get("Drive ID") or row.get("Full Drive ID") or row.get("Drive id") or "").strip()
+
+
 def save_rows_to_database(output_dir, rows, action="sync", vehicle=None):
     now = datetime.now().isoformat(timespec="seconds")
     with connect_tracker_db(output_dir) as conn:
         if vehicle is None:
             conn.execute("DELETE FROM daily_rows")
         else:
-            existing = conn.execute("SELECT id, data_json FROM daily_rows").fetchall()
-            for item in existing:
-                data = json.loads(item["data_json"])
-                if row_vehicle(data) == vehicle:
-                    conn.execute("DELETE FROM daily_rows WHERE id = ?", (item["id"],))
+            conn.execute("DELETE FROM daily_rows WHERE vehicle = ?", (vehicle,))
         for position, row in enumerate(rows, start=1):
             if vehicle is not None:
                 row["Vehicle"] = vehicle
             row_id = daily_row_id(row)
             conn.execute(
                 upsert_daily_row_sql(),
-                (row_id, position, json.dumps(row, default=str), now),
+                (row_id, position, row_vehicle(row), row_source_file(row), row_drive_id(row), json.dumps(row, default=str), now),
             )
         conn.execute(
             "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
@@ -688,7 +733,10 @@ def save_rows_to_database(output_dir, rows, action="sync", vehicle=None):
 
 def load_rows_from_database(output_dir, vehicle=None):
     with connect_tracker_db(output_dir) as conn:
-        rows = conn.execute("SELECT id, data_json FROM daily_rows ORDER BY position, id").fetchall()
+        if vehicle is None:
+            rows = conn.execute("SELECT id, data_json FROM daily_rows ORDER BY position, id").fetchall()
+        else:
+            rows = conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle = ? ORDER BY position, id", (vehicle,)).fetchall()
     result = []
     for row in rows:
         data = json.loads(row["data_json"])
@@ -708,7 +756,7 @@ def update_database_row(output_dir, row_id, row_data):
         conn.execute("DELETE FROM daily_rows WHERE id = ?", (row_id,))
         conn.execute(
             upsert_daily_row_sql(),
-            (new_id, position, json.dumps(row_data, default=str), now),
+            (new_id, position, row_vehicle(row_data), row_source_file(row_data), row_drive_id(row_data), json.dumps(row_data, default=str), now),
         )
         conn.execute("INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)", ("update", new_id, "", now))
         conn.commit()
@@ -721,7 +769,7 @@ def add_database_row(output_dir, row_data):
         position = conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM daily_rows").fetchone()["next_pos"]
         conn.execute(
             upsert_daily_row_sql(),
-            (row_id, position, json.dumps(row_data, default=str), now),
+            (row_id, position, row_vehicle(row_data), row_source_file(row_data), row_drive_id(row_data), json.dumps(row_data, default=str), now),
         )
         conn.execute("INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)", ("add", row_id, "", now))
         conn.commit()
@@ -744,7 +792,7 @@ def upsert_rows_to_database(output_dir, rows, action="upsert", vehicle=None):
                 position = conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM daily_rows").fetchone()["next_pos"]
             conn.execute(
                 upsert_daily_row_sql(),
-                (row_id, position, json.dumps(row, default=str), now),
+                (row_id, position, row_vehicle(row), row_source_file(row), row_drive_id(row), json.dumps(row, default=str), now),
             )
             count += 1
         conn.execute(
@@ -767,16 +815,17 @@ def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None)
     source_set = {str(source or "").strip() for source in source_files if str(source or "").strip()}
     if not source_set:
         return 0
-    rows = load_rows_from_database(output_dir)
-    deleted = 0
     now = datetime.now().isoformat(timespec="seconds")
     with connect_tracker_db(output_dir) as conn:
-        for row in rows:
-            row_id = row.get("_id")
-            row_source = str(row.get("Source File") or "").strip()
-            if row_id and row_source in source_set and (vehicle is None or row_vehicle(row) == vehicle):
-                conn.execute("DELETE FROM daily_rows WHERE id = ?", (row_id,))
-                deleted += 1
+        placeholders = ", ".join("?" for _ in source_set)
+        params = list(source_set)
+        if vehicle is None:
+            count_row = conn.execute(f"SELECT COUNT(*) AS count FROM daily_rows WHERE source_file IN ({placeholders})", params).fetchone()
+            conn.execute(f"DELETE FROM daily_rows WHERE source_file IN ({placeholders})", params)
+        else:
+            count_row = conn.execute(f"SELECT COUNT(*) AS count FROM daily_rows WHERE vehicle = ? AND source_file IN ({placeholders})", [vehicle] + params).fetchone()
+            conn.execute(f"DELETE FROM daily_rows WHERE vehicle = ? AND source_file IN ({placeholders})", [vehicle] + params)
+        deleted = count_row["count"] if count_row else 0
         conn.execute(
             "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
             ("delete-source-files", None, f"{deleted} row(s)", now),
@@ -786,21 +835,35 @@ def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None)
 
 
 def source_files_from_database(output_dir, vehicle=None):
-    sources = []
-    seen = set()
-    for row in load_rows_from_database(output_dir, vehicle=vehicle):
-        source = str(row.get("Source File") or "").strip()
-        if source and source not in seen:
-            seen.add(source)
-            sources.append(source)
-    return sources
+    with connect_tracker_db(output_dir) as conn:
+        if vehicle is None:
+            rows = conn.execute(
+                "SELECT source_file FROM daily_rows WHERE source_file IS NOT NULL AND source_file <> '' GROUP BY source_file ORDER BY MIN(position)"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT source_file FROM daily_rows WHERE vehicle = ? AND source_file IS NOT NULL AND source_file <> '' GROUP BY source_file ORDER BY MIN(position)",
+                (vehicle,),
+            ).fetchall()
+    return [row["source_file"] for row in rows]
+
+
+def count_rows_in_database(output_dir, vehicle=None):
+    with connect_tracker_db(output_dir) as conn:
+        if vehicle is None:
+            row = conn.execute("SELECT COUNT(*) AS count FROM daily_rows").fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS count FROM daily_rows WHERE vehicle = ?", (vehicle,)).fetchone()
+    return int(row["count"] or 0) if row else 0
 
 
 def vehicles_from_database(output_dir):
     vehicles = vehicle_list_from_settings(output_dir)
     seen = set(vehicles)
-    for row in load_rows_from_database(output_dir):
-        vehicle = row_vehicle(row)
+    with connect_tracker_db(output_dir) as conn:
+        rows = conn.execute("SELECT vehicle FROM daily_rows WHERE vehicle IS NOT NULL AND vehicle <> '' GROUP BY vehicle ORDER BY MIN(position)").fetchall()
+    for row in rows:
+        vehicle = row["vehicle"]
         if vehicle not in seen:
             seen.add(vehicle)
             vehicles.append(vehicle)
