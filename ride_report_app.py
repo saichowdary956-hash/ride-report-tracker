@@ -14,6 +14,7 @@ from ride_report_tool import (
     add_database_row,
     delete_database_row,
     delete_database_rows_by_source_files,
+    database_fallback_reason,
     import_tracker_workbook,
     load_rows_from_database,
     process_reports,
@@ -408,6 +409,14 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         <button type="submit">Process Anyway</button>
       </form>"""
     notice = f"<div class='notice'>{html.escape(message)}</div>" if message else ""
+    db_warning = ""
+    fallback_reason = database_fallback_reason()
+    if fallback_reason:
+        db_warning = (
+            "<div class='notice'><strong>Temporary local storage is active.</strong> "
+            "The cloud database connection failed, so the app is open using SQLite fallback. "
+            f"<span class='muted'>{html.escape(fallback_reason)}</span></div>"
+        )
     skipped_notice = (
         f"<div class='notice'><strong>Skipped files</strong><ul class='skipped'>{skipped_cards}</ul>"
         f"<div class='muted'>Some expected fields are missing. You can still process the file and missing fields will stay blank.</div>{process_anyway}</div>"
@@ -655,6 +664,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
       <button class="tab-button {'active' if active_tab == 'progress' else ''}" type="button" data-tab="progress">Progress</button>
     </nav>
+    {db_warning}
     {notice}
     {skipped_notice}
     <section id="home" class="tab-panel {'active' if active_tab == 'home' else ''}">

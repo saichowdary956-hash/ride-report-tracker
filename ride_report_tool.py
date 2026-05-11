@@ -412,6 +412,17 @@ def using_cloud_database():
     return bool(database_url())
 
 
+def allow_sqlite_fallback():
+    return os.environ.get("ALLOW_SQLITE_FALLBACK", "1").strip().lower() not in {"0", "false", "no"}
+
+
+DATABASE_FALLBACK_REASON = ""
+
+
+def database_fallback_reason():
+    return DATABASE_FALLBACK_REASON
+
+
 def upsert_daily_row_sql():
     return """
         INSERT INTO daily_rows (id, position, data_json, updated_at)
@@ -507,8 +518,15 @@ def connect_postgres_tracker_db():
 
 
 def connect_tracker_db(output_dir):
+    global DATABASE_FALLBACK_REASON
     if using_cloud_database():
-        return connect_postgres_tracker_db()
+        try:
+            return connect_postgres_tracker_db()
+        except Exception as exc:
+            if not allow_sqlite_fallback():
+                raise
+            DATABASE_FALLBACK_REASON = str(exc)
+            print(f"WARNING: Could not connect to DATABASE_URL; falling back to local SQLite. Reason: {exc}")
     db_path = tracker_db_path(output_dir)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
