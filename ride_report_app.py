@@ -65,6 +65,14 @@ TRACKER_PATH = OUTPUT_DIR / "daily_tracker.xlsx"
 DEFAULT_DOWNLOADS = Path.home() / "Downloads"
 
 
+def can_open_excel_locally():
+    return hasattr(os, "startfile")
+
+
+def excel_action_label():
+    return "Edit Daily Tracker Excel" if can_open_excel_locally() else "Download Daily Tracker Excel"
+
+
 def read_preview(path, sheet_name, limit=8):
     if not path.exists():
         return []
@@ -415,6 +423,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         db_warning = (
             "<div class='notice'><strong>Temporary local storage is active.</strong> "
             "The cloud database connection failed, so the app is open using SQLite fallback. "
+            "On Render, redeploy using the Blueprint from GitHub or remove the manually entered DATABASE_URL so "
+            "Render can inject DATABASE_URL from ride-report-db. "
             f"<span class='muted'>{html.escape(fallback_reason)}</span></div>"
         )
     skipped_notice = (
@@ -679,7 +689,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
           {source_delete_form_html()}
         </div>
         <div>
-          <a class="button" href="/open-excel">Edit Daily Tracker Excel</a>
+          <a class="button" href="/open-excel">{excel_action_label()}</a>
           <form action="/sync-excel" method="post" class="inline-action">
             <button type="submit">Update Totals from Excel</button>
           </form>
@@ -742,6 +752,7 @@ class Handler(BaseHTTPRequestHandler):
         selected_source = query.get("source", [""])[0]
         if parsed.path == "/download":
             target = active_tracker_path()
+            rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=active_vehicle())
             if not target.exists():
                 self.send_error(404, "File not found")
                 return
@@ -758,6 +769,15 @@ class Handler(BaseHTTPRequestHandler):
             rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=active_vehicle())
             if not target.exists():
                 self.send_error(404, "File not found")
+                return
+            if not can_open_excel_locally():
+                data = target.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
             try:
                 os.startfile(target)
