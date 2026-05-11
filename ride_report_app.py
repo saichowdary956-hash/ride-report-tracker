@@ -412,7 +412,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     skipped = skipped or []
     tracker_rows = current_rows()
     planned_hours = current_planned_hours()
-    active_tab = active_tab if active_tab in {"home", "tracker", "csv-list", "progress"} else "home"
+    active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress"} else "home"
     skipped_cards = "".join(
         f"<li><strong>{html.escape(item.get('file', ''))}</strong> {html.escape(item.get('message', ''))}</li>"
         for item in skipped
@@ -690,7 +690,6 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <div class="active-vehicle-banner">Showing data only for: {html.escape(active_vehicle())}</div>
     <nav class="tabs">
       <button class="tab-button {'active' if active_tab == 'home' else ''}" type="button" data-tab="home">Home</button>
-      <button class="tab-button {'active' if active_tab == 'tracker' else ''}" type="button" data-tab="tracker">Daily Tracker</button>
       <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
       <button class="tab-button {'active' if active_tab == 'progress' else ''}" type="button" data-tab="progress">Progress</button>
     </nav>
@@ -709,16 +708,16 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
           {source_delete_form_html()}
         </div>
         <div>
-          <a class="button" href="/open-excel">{excel_action_label()}</a>
+          <a class="button" href="/?tab=excel-editor">Edit Excel File</a>
           <form action="/sync-excel" method="post" class="inline-action">
             <button type="submit">Update Totals from Excel</button>
           </form>
         </div>
       </div>
     </section>
-    <section id="tracker" class="tab-panel {'active' if active_tab == 'tracker' else ''}">
+    <section id="excel-editor" class="tab-panel {'active' if active_tab == 'excel-editor' else ''}">
       <div class="panel">
-        <h2>Daily Tracker Editor - {html.escape(active_vehicle())}</h2>
+        <h2>Edit Excel File - {html.escape(active_vehicle())}</h2>
         {browser_editor_html(tracker_rows)}
       </div>
     </section>
@@ -855,7 +854,7 @@ class Handler(BaseHTTPRequestHandler):
                 skipped = []
                 message = "Row updated and saved to the tracker database."
                 pending_folder = ""
-                active_tab = "tracker"
+                active_tab = "excel-editor"
             elif self.path == "/row/delete":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
@@ -865,7 +864,7 @@ class Handler(BaseHTTPRequestHandler):
                 skipped = []
                 message = "Row deleted from the tracker database."
                 pending_folder = ""
-                active_tab = "tracker"
+                active_tab = "excel-editor"
             elif self.path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row = row_from_form(form)
@@ -876,14 +875,14 @@ class Handler(BaseHTTPRequestHandler):
                 skipped = []
                 message = "Row added to the tracker database."
                 pending_folder = ""
-                active_tab = "tracker"
+                active_tab = "excel-editor"
             elif self.path == "/sync-excel":
                 rows = import_tracker_workbook(OUTPUT_DIR, active_tracker_path(), vehicle=active_vehicle())
                 processed = []
                 skipped = []
                 message = f"Synced {len(rows)} Excel row(s) to the tracker database. If Excel is open locally, save and close it before syncing again to rewrite recalculated totals into the workbook."
                 pending_folder = ""
-                active_tab = "tracker"
+                active_tab = "excel-editor"
             elif self.path == "/delete-csv":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 selected_sources = form.get("source_file", [])
