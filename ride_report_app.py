@@ -58,7 +58,7 @@ PROGRESS_FIELD_BY_CONDITION = {
 }
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(os.environ.get("RIDE_REPORT_BASE_DIR", Path(__file__).resolve().parent))
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 TRACKER_PATH = OUTPUT_DIR / "daily_tracker.xlsx"
