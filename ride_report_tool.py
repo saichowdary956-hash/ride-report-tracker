@@ -398,7 +398,14 @@ def tracker_db_path(output_dir):
 
 
 def database_url():
-    return os.environ.get("DATABASE_URL", "").strip()
+    value = os.environ.get("DATABASE_URL", "").strip()
+    if value.upper().startswith("DATABASE_URL="):
+        value = value.split("=", 1)[1].strip()
+    value = value.strip("\"'")
+    value = re.sub(r"\s+", "", value)
+    if value.startswith("postgres://"):
+        value = "postgresql://" + value[len("postgres://"):]
+    return value
 
 
 def using_cloud_database():
@@ -454,7 +461,14 @@ def connect_postgres_tracker_db():
     except ImportError as exc:
         raise RuntimeError("DATABASE_URL is set, but psycopg is not installed. Run: pip install -r requirements.txt") from exc
 
-    conn = psycopg.connect(database_url(), row_factory=dict_row)
+    try:
+        conn = psycopg.connect(database_url(), row_factory=dict_row)
+    except psycopg.ProgrammingError as exc:
+        raise RuntimeError(
+            "DATABASE_URL is not a valid PostgreSQL connection string. In Render, set DATABASE_URL to the raw "
+            "Supabase/Render Postgres URI only, with no quotes and no 'DATABASE_URL=' prefix. If using Supabase, "
+            "append '?sslmode=require'."
+        ) from exc
     db = PostgresConnection(conn)
     db.execute(
         """
