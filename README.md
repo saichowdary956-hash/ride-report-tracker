@@ -35,14 +35,8 @@ When `DATABASE_URL` is present, all vehicle rows, uploaded CSV records, settings
 ## Render Deployment
 
 1. Push this folder to a GitHub repository.
-2. Create a PostgreSQL database, for example Supabase or Render Postgres.
-3. Copy the database connection string.
-4. In Render, create a new Web Service from the GitHub repository.
-5. Use:
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `python ride_report_app.py`
-6. Add environment variable:
-   - `DATABASE_URL=<your postgres connection string>`
+2. In Render, create a new Blueprint from the GitHub repository.
+3. Render reads `render.yaml`, creates the web service, creates a PostgreSQL database, and injects `DATABASE_URL` automatically.
 
 `render.yaml` is included so Render can detect the Python service settings.
 

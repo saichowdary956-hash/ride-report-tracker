@@ -9,4 +9,14 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.7
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: ride-report-db
+          property: connectionString
+      - key: ALLOW_SQLITE_FALLBACK
+        value: "1"
+
+databases:
+  - name: ride-report-db
+    plan: free
+    databaseName: ride_report_tracker
+    postgresMajorVersion: "17"
