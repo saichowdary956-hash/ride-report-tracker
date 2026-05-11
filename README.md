@@ -34,6 +34,12 @@ When `DATABASE_URL` is present, all vehicle rows, uploaded CSV records, settings
 
 ## Render Deployment
 
+Fastest link:
+
+```text
+https://render.com/deploy?repo=https://github.com/saichowdary956-hash/ride-report-tracker
+```
+
 1. Push this folder to a GitHub repository.
 2. In Render, create a new Blueprint from the GitHub repository.
 3. Render reads `render.yaml`, creates the web service, creates a PostgreSQL database, and injects `DATABASE_URL` automatically.
