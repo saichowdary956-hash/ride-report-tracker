@@ -1534,11 +1534,14 @@ def process_reports(input_path, output_dir, tracker_name="daily_tracker.xlsx", f
         save_rows_to_database(output_dir, [], action="fresh-upload-clear", vehicle=vehicle)
 
     if not processed:
+        detail = ""
+        if skipped:
+            detail = " Skipped: " + "; ".join(f"{item.get('file', '')}: {item.get('message', '')}" for item in skipped[:5])
         return {
             "processed": processed,
             "skipped": skipped,
             "tracker_path": tracker_path,
-            "message": "No valid RideReport CSV files found.",
+            "message": "No valid RideReport CSV files found." + detail,
         }
 
     upsert_rows_to_database(output_dir, new_rows, action="process-csv", vehicle=vehicle)

@@ -18,7 +18,6 @@ from ride_report_app import (
     active_tracker_path,
     active_vehicle,
     page,
-    process_csv_paths,
     row_from_form,
     vehicle_setting_key,
 )
@@ -81,7 +80,9 @@ def upload():
             target = staging / Path(uploaded.filename).name
             uploaded.save(target)
             csv_paths.append(target)
-    result = process_csv_paths(csv_paths)
+    if not csv_paths:
+        return render_app("No CSV files were received. Please choose one or more .csv files.", active_tab="home")
+    result = process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
     return render_app(result["message"], result["processed"], result["skipped"], active_tab="home")
 
 
