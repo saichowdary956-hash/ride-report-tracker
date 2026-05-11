@@ -209,6 +209,21 @@ def add_row_form_html():
     </form>"""
 
 
+def browser_editor_html(rows):
+    return f"""
+    <div class="editor-actions">
+      <a class="button" href="/download">Download Excel Copy</a>
+      <form action="/sync-excel" method="post" class="inline-action">
+        <button type="submit">Refresh Totals</button>
+      </form>
+    </div>
+    <div class="muted">Edit values in the table, then click Update on that row. Changes are saved to the tracker database and the Excel file is regenerated.</div>
+    <div class="table-wrap editor-table">{tracker_table_html(rows)}</div>
+    <h2 class="add-row-title">Add Daily Tracker Row</h2>
+    {add_row_form_html()}
+    """
+
+
 def totals_table_html(rows):
     totals = totals_from_daily_rows(rows)
     if not totals:
@@ -397,7 +412,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     skipped = skipped or []
     tracker_rows = current_rows()
     planned_hours = current_planned_hours()
-    active_tab = active_tab if active_tab in {"home", "csv-list", "progress"} else "home"
+    active_tab = active_tab if active_tab in {"home", "tracker", "csv-list", "progress"} else "home"
     skipped_cards = "".join(
         f"<li><strong>{html.escape(item.get('file', ''))}</strong> {html.escape(item.get('message', ''))}</li>"
         for item in skipped
@@ -491,6 +506,10 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     h2 {{ margin: 0 0 12px; font-size: 16px; }}
     form {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
     .inline-action {{ margin-top: 10px; }}
+    .editor-actions {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }}
+    .editor-actions .inline-action {{ margin-top: 0; }}
+    .editor-table {{ max-height: 580px; }}
+    .add-row-title {{ margin-top: 18px; }}
     input[type=file], input[type=text], td input, .add-grid input {{
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -671,6 +690,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <div class="active-vehicle-banner">Showing data only for: {html.escape(active_vehicle())}</div>
     <nav class="tabs">
       <button class="tab-button {'active' if active_tab == 'home' else ''}" type="button" data-tab="home">Home</button>
+      <button class="tab-button {'active' if active_tab == 'tracker' else ''}" type="button" data-tab="tracker">Daily Tracker</button>
       <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
       <button class="tab-button {'active' if active_tab == 'progress' else ''}" type="button" data-tab="progress">Progress</button>
     </nav>
@@ -694,6 +714,12 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
             <button type="submit">Update Totals from Excel</button>
           </form>
         </div>
+      </div>
+    </section>
+    <section id="tracker" class="tab-panel {'active' if active_tab == 'tracker' else ''}">
+      <div class="panel">
+        <h2>Daily Tracker Editor - {html.escape(active_vehicle())}</h2>
+        {browser_editor_html(tracker_rows)}
       </div>
     </section>
     <section id="csv-list" class="tab-panel {'active' if active_tab == 'csv-list' else ''}">
@@ -827,9 +853,9 @@ class Handler(BaseHTTPRequestHandler):
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
                 processed = []
                 skipped = []
-                message = "Row updated and backed up to SQLite."
+                message = "Row updated and saved to the tracker database."
                 pending_folder = ""
-                active_tab = "home"
+                active_tab = "tracker"
             elif self.path == "/row/delete":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
@@ -837,9 +863,9 @@ class Handler(BaseHTTPRequestHandler):
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
                 processed = []
                 skipped = []
-                message = "Row deleted and SQLite backup updated."
+                message = "Row deleted from the tracker database."
                 pending_folder = ""
-                active_tab = "home"
+                active_tab = "tracker"
             elif self.path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row = row_from_form(form)
@@ -848,16 +874,16 @@ class Handler(BaseHTTPRequestHandler):
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
                 processed = []
                 skipped = []
-                message = "Row added and backed up to SQLite."
+                message = "Row added to the tracker database."
                 pending_folder = ""
-                active_tab = "home"
+                active_tab = "tracker"
             elif self.path == "/sync-excel":
                 rows = import_tracker_workbook(OUTPUT_DIR, active_tracker_path(), vehicle=active_vehicle())
                 processed = []
                 skipped = []
-                message = f"Synced {len(rows)} Excel row(s) to SQLite. If Excel is open, save and close it before syncing again to rewrite recalculated totals into the workbook."
+                message = f"Synced {len(rows)} Excel row(s) to the tracker database. If Excel is open locally, save and close it before syncing again to rewrite recalculated totals into the workbook."
                 pending_folder = ""
-                active_tab = "home"
+                active_tab = "tracker"
             elif self.path == "/delete-csv":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 selected_sources = form.get("source_file", [])
