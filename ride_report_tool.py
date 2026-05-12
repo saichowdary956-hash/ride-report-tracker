@@ -398,7 +398,13 @@ def tracker_db_path(output_dir):
 
 
 def database_url():
-    value = os.environ.get("DATABASE_URL", "").strip()
+    value = (
+        os.environ.get("DATABASE_URL")
+        or os.environ.get("POSTGRES_URL")
+        or os.environ.get("POSTGRES_PRISMA_URL")
+        or os.environ.get("POSTGRES_URL_NON_POOLING")
+        or ""
+    ).strip()
     if value.upper().startswith("DATABASE_URL="):
         value = value.split("=", 1)[1].strip()
     value = value.strip("\"'")

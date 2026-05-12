@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from pathlib import Path
 
 os.environ.setdefault("RIDE_REPORT_BASE_DIR", "/tmp/ride-report-tracker")
@@ -35,6 +36,47 @@ from ride_report_tool import (
 )
 
 app = Flask(__name__)
+
+
+def setup_error_page(exc):
+    error_text = traceback.format_exc(limit=4)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RideReport Setup Error</title>
+  <style>
+    body {{ font-family: Segoe UI, Arial, sans-serif; background: #f4f7f9; color: #17212b; margin: 0; padding: 32px; }}
+    main {{ max-width: 900px; margin: 0 auto; background: #fff; border: 1px solid #d8dee6; border-radius: 8px; padding: 22px; }}
+    code, pre {{ background: #eef3f6; border-radius: 6px; padding: 3px 5px; }}
+    pre {{ overflow: auto; padding: 12px; white-space: pre-wrap; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Database setup needs attention</h1>
+    <p>The app is deployed, but it could not connect to PostgreSQL.</p>
+    <p>In Vercel, connect Neon Postgres under <strong>Storage</strong>. The app now accepts any of these variables:</p>
+    <ul>
+      <li><code>DATABASE_URL</code></li>
+      <li><code>POSTGRES_URL</code></li>
+      <li><code>POSTGRES_PRISMA_URL</code></li>
+      <li><code>POSTGRES_URL_NON_POOLING</code></li>
+    </ul>
+    <p>Keep <code>ALLOW_SQLITE_FALLBACK=0</code> only after the Neon variable exists.</p>
+    <h2>Error</h2>
+    <pre>{str(exc)}</pre>
+    <h2>Trace</h2>
+    <pre>{error_text}</pre>
+  </main>
+</body>
+</html>""", 500
+
+
+@app.errorhandler(Exception)
+def handle_error(exc):
+    return setup_error_page(exc)
 
 
 @app.before_request
