@@ -1080,6 +1080,8 @@ def write_completed_totals_sheet(workbook, rows):
 
 
 def build_tracker_from_daily_rows(tracker_path, rows):
+    tracker_path = Path(tracker_path)
+    tracker_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     workbook.remove(workbook.active)
     write_daily_rows_sheet(workbook, rows)

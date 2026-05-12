@@ -36,6 +36,8 @@ from ride_report_tool import (
 )
 
 app = Flask(__name__)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def setup_error_page(exc):
