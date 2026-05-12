@@ -97,6 +97,10 @@ def vehicle_setting_key(vehicle, key):
     return f"vehicle::{vehicle}::{key}"
 
 
+def vehicle_param():
+    return quote_plus(active_vehicle())
+
+
 def current_rows():
     return load_rows_from_database(OUTPUT_DIR, vehicle=active_vehicle())
 
@@ -153,18 +157,19 @@ def tracker_table_html(rows):
         cells = ""
         for header_name in headers:
             value = html.escape(str(row.get(header_name, "")))
+            field_class = "field-drive-id" if header_name == "Drive ID" else ""
             cells += (
                 "<td>"
-                f"<input form=\"edit-{row_id}\" name=\"{html.escape(header_name)}\" value=\"{value}\">"
+                f"<input class=\"{field_class}\" form=\"edit-{row_id}\" name=\"{html.escape(header_name)}\" value=\"{value}\">"
                 "</td>"
             )
         actions = f"""
         <td class="actions">
-          <form id="edit-{row_id}" action="/row/update" method="post">
+          <form id="edit-{row_id}" action="/row/update?vehicle={vehicle_param()}" method="post">
             <input type="hidden" name="row_id" value="{row_id}">
             <button type="submit">Update</button>
           </form>
-          <form action="/row/delete" method="post">
+          <form action="/row/delete?vehicle={vehicle_param()}" method="post">
             <input type="hidden" name="row_id" value="{row_id}">
             <button class="danger" type="submit">Delete</button>
           </form>
@@ -204,7 +209,7 @@ def add_row_form_html():
         for header in headers
     )
     return f"""
-    <form action="/row/add" method="post" class="add-grid">
+    <form action="/row/add?vehicle={vehicle_param()}" method="post" class="add-grid">
       {inputs}
       <button type="submit">Add Row</button>
     </form>"""
@@ -213,8 +218,8 @@ def add_row_form_html():
 def browser_editor_html(rows):
     return f"""
     <div class="editor-actions">
-      <a class="button" href="/download">Download Excel Copy</a>
-      <form action="/sync-excel" method="post" class="inline-action">
+      <a class="button" href="/download?vehicle={vehicle_param()}">Download Excel Copy</a>
+      <form action="/sync-excel?vehicle={vehicle_param()}" method="post" class="inline-action">
         <button type="submit">Refresh Totals</button>
       </form>
     </div>
@@ -364,7 +369,7 @@ def source_delete_form_html():
         for source in sources
     )
     return f"""
-    <form action="/delete-csv" method="post" class="delete-csv-form">
+    <form action="/delete-csv?vehicle={vehicle_param()}" method="post" class="delete-csv-form">
       <div class="source-list">{options}</div>
       <button class="danger" type="submit">Delete CSV Files</button>
     </form>"""
@@ -518,6 +523,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       background: #fff;
       min-width: 280px;
     }}
+    td input.field-drive-id {{ min-width: 310px; font-family: Consolas, monospace; }}
     select {{
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -700,7 +706,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <section id="home" class="tab-panel {'active' if active_tab == 'home' else ''}">
       <div class="panel top-actions">
         <div>
-          <form action="/upload" method="post" enctype="multipart/form-data">
+          <form action="/upload?vehicle={vehicle_param()}" method="post" enctype="multipart/form-data">
             <input type="file" name="files" accept=".csv" multiple>
             <button type="submit">Upload CSV Files to {html.escape(active_vehicle())}</button>
           </form>
@@ -709,8 +715,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
           {source_delete_form_html()}
         </div>
         <div>
-          <a class="button" href="/?tab=excel-editor">Edit Excel File</a>
-          <form action="/sync-excel" method="post" class="inline-action">
+          <a class="button" href="/?tab=excel-editor&vehicle={vehicle_param()}">Edit Excel File</a>
+          <form action="/sync-excel?vehicle={vehicle_param()}" method="post" class="inline-action">
             <button type="submit">Update Totals from Excel</button>
           </form>
         </div>
@@ -732,7 +738,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <section id="progress" class="tab-panel {'active' if active_tab == 'progress' else ''}">
       <div class="panel">
         <h2>Progress - {html.escape(active_vehicle())}</h2>
-        <form action="/settings/planned-hours" method="post" class="inline-action">
+        <form action="/settings/planned-hours?vehicle={vehicle_param()}" method="post" class="inline-action">
           <label>Total planned hours
             <input type="text" name="total_planned_hours" value="{planned_hours:g}">
           </label>
@@ -814,10 +820,16 @@ class Handler(BaseHTTPRequestHandler):
         self.respond_html(page(active_tab=active_tab, selected_source=selected_source))
 
     def do_POST(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        if query.get("vehicle"):
+            vehicle = query.get("vehicle", ["Default"])[0].strip() or "Default"
+            set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+        request_path = parsed.path
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         try:
-            if self.path == "/upload":
+            if request_path == "/upload":
                 csv_paths = parse_multipart(body, self.headers.get("Content-Type", ""))
                 result = process_csv_paths(csv_paths)
                 processed = result["processed"]
@@ -825,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = result["message"]
                 pending_folder = ""
                 active_tab = "home"
-            elif self.path == "/upload-anyway":
+            elif request_path == "/upload-anyway":
                 staging = UPLOAD_DIR / "_last_batch"
                 result = process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=True, vehicle=active_vehicle())
                 processed = result["processed"]
@@ -833,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = "Processed with missing fields left blank. " + result["message"]
                 pending_folder = ""
                 active_tab = "home"
-            elif self.path == "/folder":
+            elif request_path == "/folder":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 folder = Path(form.get("folder", [str(DEFAULT_DOWNLOADS)])[0])
                 allow_partial = form.get("allow_partial", ["0"])[0] == "1"
@@ -844,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = prefix + result["message"] + f" Source: {folder}."
                 pending_folder = str(folder)
                 active_tab = "home"
-            elif self.path == "/row/update":
+            elif request_path == "/row/update":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
                 row = row_from_form(form)
@@ -856,7 +868,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = "Row updated and saved to the tracker database."
                 pending_folder = ""
                 active_tab = "excel-editor"
-            elif self.path == "/row/delete":
+            elif request_path == "/row/delete":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
                 delete_database_row(OUTPUT_DIR, row_id)
@@ -866,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = "Row deleted from the tracker database."
                 pending_folder = ""
                 active_tab = "excel-editor"
-            elif self.path == "/row/add":
+            elif request_path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row = row_from_form(form)
                 row["Vehicle"] = active_vehicle()
@@ -877,14 +889,14 @@ class Handler(BaseHTTPRequestHandler):
                 message = "Row added to the tracker database."
                 pending_folder = ""
                 active_tab = "excel-editor"
-            elif self.path == "/sync-excel":
+            elif request_path == "/sync-excel":
                 rows = import_tracker_workbook(OUTPUT_DIR, active_tracker_path(), vehicle=active_vehicle())
                 processed = []
                 skipped = []
                 message = f"Synced {len(rows)} Excel row(s) to the tracker database. If Excel is open locally, save and close it before syncing again to rewrite recalculated totals into the workbook."
                 pending_folder = ""
                 active_tab = "excel-editor"
-            elif self.path == "/delete-csv":
+            elif request_path == "/delete-csv":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 selected_sources = form.get("source_file", [])
                 deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=active_vehicle())
@@ -897,7 +909,7 @@ class Handler(BaseHTTPRequestHandler):
                     message = "No CSV files selected for deletion."
                 pending_folder = ""
                 active_tab = "home"
-            elif self.path == "/settings/planned-hours":
+            elif request_path == "/settings/planned-hours":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 raw_value = form.get("total_planned_hours", [str(DEFAULT_TOTAL_PLANNED_HOURS)])[0].strip()
                 try:
@@ -912,7 +924,7 @@ class Handler(BaseHTTPRequestHandler):
                 skipped = []
                 pending_folder = ""
                 active_tab = "progress"
-            elif self.path == "/vehicle/select":
+            elif request_path == "/vehicle/select":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 vehicle = form.get("vehicle", ["Default"])[0].strip() or "Default"
                 set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
@@ -922,7 +934,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = f"Switched to vehicle: {vehicle}."
                 pending_folder = ""
                 active_tab = "home"
-            elif self.path == "/vehicle/add":
+            elif request_path == "/vehicle/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 vehicle = form.get("vehicle", [""])[0].strip()
                 if vehicle:
@@ -937,7 +949,7 @@ class Handler(BaseHTTPRequestHandler):
                 skipped = []
                 pending_folder = ""
                 active_tab = "home"
-            elif self.path == "/vehicle/remove":
+            elif request_path == "/vehicle/remove":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 vehicle = form.get("vehicle", [active_vehicle()])[0].strip()
                 if vehicle and vehicle != "Default":

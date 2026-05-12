@@ -37,6 +37,13 @@ from ride_report_tool import (
 app = Flask(__name__)
 
 
+@app.before_request
+def capture_selected_vehicle():
+    vehicle = (request.values.get("vehicle") or "").strip()
+    if vehicle:
+        set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+
+
 def form_lists():
     return {key: request.form.getlist(key) for key in request.form.keys()}
 
