@@ -48,6 +48,14 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+@app.after_request
+def no_store_dynamic_pages(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 def setup_error_page(exc):
     error_text = traceback.format_exc(limit=4)
     return f"""<!doctype html>
