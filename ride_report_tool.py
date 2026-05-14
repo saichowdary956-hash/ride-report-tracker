@@ -323,6 +323,15 @@ def duration_to_excel_time(value):
     return parse_duration(value).total_seconds() / 86400
 
 
+def as_excel_text(value):
+    return "" if value is None else str(value)
+
+
+def set_text_cell(cell, value):
+    cell.value = as_excel_text(value)
+    cell.number_format = "@"
+
+
 def category_index(category_rows):
     index = defaultdict(dict)
     for row in category_rows:
@@ -954,35 +963,31 @@ def write_daily_tracker_sheet(workbook, rides, category_rows):
         for column_number, (header, category, label) in enumerate(DAILY_TRACKER_COLUMNS, start=1):
             cell = sheet.cell(row=row_number, column=column_number)
             if header == "Date":
-                cell.value = ride.get("Date")
-                cell.number_format = "m/d/yyyy"
+                set_text_cell(cell, display_value(ride.get("Date")))
             elif header == "Drive ID":
-                cell.value = ride.get("Full Drive ID") or ride.get("Drive id")
+                set_text_cell(cell, ride.get("Full Drive ID") or ride.get("Drive id"))
             elif header == "Start Location":
-                cell.value = ride.get("Start Location", "")
+                set_text_cell(cell, ride.get("Start Location", ""))
             elif header == "End Location":
-                cell.value = ride.get("End Location", "")
+                set_text_cell(cell, ride.get("End Location", ""))
             elif header == "RSU Start Date":
-                cell.value = ride.get("RSU Startdate")
-                cell.number_format = "m/d/yyyy"
+                set_text_cell(cell, display_value(ride.get("RSU Startdate")))
             elif header == "RSU No":
-                cell.value = ride.get("RSU No")
+                set_text_cell(cell, ride.get("RSU No"))
             elif header == "RSU Storage %":
-                cell.value = ride.get("RSU Storage %")
-                cell.number_format = '0"%"'
+                set_text_cell(cell, display_value(ride.get("RSU Storage %")))
             elif header == "Session Start Time":
-                cell.value = ride.get("Session Starttime")
+                set_text_cell(cell, ride.get("Session Starttime"))
             elif header == "Session End Time":
-                cell.value = ride.get("Session Endtime")
+                set_text_cell(cell, ride.get("Session Endtime"))
             elif header == "Overall Session Time":
-                cell.value = ride.get("Overall Sessiontime")
+                set_text_cell(cell, ride.get("Overall Sessiontime"))
             elif category:
-                cell.value = duration_to_excel_time(index[key].get((category, label), "00:00:00"))
-                cell.number_format = "[h]:mm:ss"
+                set_text_cell(cell, index[key].get((category, label), "00:00:00"))
             elif header == "Z-frame Checker":
-                cell.value = ride.get("Z-frame Checker", "")
+                set_text_cell(cell, ride.get("Z-frame Checker", ""))
             else:
-                cell.value = str(ride.get("Comments") or "").strip() if header == "Comments" else ""
+                set_text_cell(cell, str(ride.get("Comments") or "").strip() if header == "Comments" else "")
             if header == "Z-frame Checker":
                 style_cell(cell, fill="D9EAD3")
             else:
@@ -1034,21 +1039,15 @@ def write_daily_rows_sheet(workbook, rows):
             cell = sheet.cell(row=row_number, column=column_number)
             value = row.get(header, "")
             if header == "Date":
-                parsed = parse_date(value)
-                cell.value = parsed if hasattr(parsed, "strftime") else value
-                cell.number_format = "m/d/yyyy"
+                set_text_cell(cell, display_value(value))
             elif header == "RSU Start Date":
-                parsed = parse_date(value)
-                cell.value = parsed if hasattr(parsed, "strftime") else value
-                cell.number_format = "m/d/yyyy"
+                set_text_cell(cell, display_value(value))
             elif header == "RSU Storage %":
-                cell.value = parse_percent(value)
-                cell.number_format = '0"%"'
+                set_text_cell(cell, display_value(value))
             elif header in duration_headers:
-                cell.value = duration_to_excel_time(value)
-                cell.number_format = "[h]:mm:ss"
+                set_text_cell(cell, value)
             else:
-                cell.value = value
+                set_text_cell(cell, value)
             if header == "Z-frame Checker":
                 checker_value = str(value or "").strip().lower()
                 fill = "00FF00" if checker_value == "passed" else "FFC7CE" if checker_value == "failed" else "FFFF00" if checker_value == "repairable" else "D9EAD3"
@@ -1073,7 +1072,7 @@ def write_completed_totals_sheet(workbook, rows):
     for item in totals_from_daily_rows(rows):
         sheet.append([item["Category"], item["Field"], item["Total"]])
     for row in sheet.iter_rows(min_row=2):
-        row[2].number_format = "[h]:mm:ss"
+        row[2].number_format = "@"
     for sheet_cell in sheet[1]:
         style_cell(sheet_cell, fill="B6D7A8", bold=True)
     autofit(sheet)
