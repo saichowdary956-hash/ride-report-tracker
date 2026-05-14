@@ -266,7 +266,7 @@ def delete_csv():
     deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=vehicle)
     rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
     message = f"Deleted {deleted} Daily Tracker row(s) from selected CSV file(s)." if selected_sources else "No CSV files selected for deletion."
-    return render_app(message, active_tab="home", vehicle=vehicle)
+    return render_app(message, active_tab="csv-list", vehicle=vehicle)
 
 
 @app.post("/settings/planned-hours")

@@ -578,7 +578,7 @@ def connect_postgres_tracker_db():
             vehicle = COALESCE(NULLIF(vehicle, ''), COALESCE(NULLIF(data_json::jsonb ->> 'Vehicle', ''), 'Default')),
             source_file = COALESCE(NULLIF(source_file, ''), data_json::jsonb ->> 'Source File'),
             drive_id = COALESCE(NULLIF(drive_id, ''), data_json::jsonb ->> 'Drive ID')
-        WHERE vehicle IS NULL OR source_file IS NULL OR drive_id IS NULL
+        WHERE vehicle IS NULL OR vehicle = '' OR source_file IS NULL OR source_file = '' OR drive_id IS NULL OR drive_id = ''
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_position ON daily_rows (position)")
@@ -662,7 +662,7 @@ def connect_tracker_db(output_dir):
         )
         """
     )
-    for item in conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle IS NULL OR source_file IS NULL OR drive_id IS NULL").fetchall():
+    for item in conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle IS NULL OR vehicle = '' OR source_file IS NULL OR source_file = '' OR drive_id IS NULL OR drive_id = ''").fetchall():
         data = json.loads(item["data_json"])
         conn.execute(
             "UPDATE daily_rows SET vehicle = ?, source_file = ?, drive_id = ? WHERE id = ?",

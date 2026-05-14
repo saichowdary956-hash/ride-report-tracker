@@ -818,10 +818,10 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     {vehicle_selector_html(vehicle)}
     <div class="active-vehicle-banner">Showing data only for: {html.escape(vehicle)}</div>
     <nav class="tabs">
-      <button class="tab-button {'active' if active_tab == 'home' else ''}" type="button" data-tab="home">Home</button>
-      <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
-      <button class="tab-button {'active' if active_tab == 'progress' else ''}" type="button" data-tab="progress">Progress</button>
-      <button class="tab-button {'active' if active_tab == 'charts' else ''}" type="button" data-tab="charts">Charts</button>
+      <a class="tab-button {'active' if active_tab == 'home' else ''}" href="/?tab=home&vehicle={vehicle_param(vehicle)}">Home</a>
+      <a class="tab-button {'active' if active_tab == 'csv-list' else ''}" href="/?tab=csv-list&vehicle={vehicle_param(vehicle)}">CSV Files</a>
+      <a class="tab-button {'active' if active_tab == 'progress' else ''}" href="/?tab=progress&vehicle={vehicle_param(vehicle)}">Progress</a>
+      <a class="tab-button {'active' if active_tab == 'charts' else ''}" href="/?tab=charts&vehicle={vehicle_param(vehicle)}">Charts</a>
     </nav>
     {db_warning}
     {notice}
@@ -1071,7 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     message = "No CSV files selected for deletion."
                 pending_folder = ""
-                active_tab = "home"
+                active_tab = "csv-list"
             elif request_path == "/settings/planned-hours":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 raw_value = form.get("total_planned_hours", [str(DEFAULT_TOTAL_PLANNED_HOURS)])[0].strip()
