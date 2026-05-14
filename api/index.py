@@ -31,6 +31,7 @@ from ride_report_tool import (
     delete_database_rows_by_source_files,
     import_tracker_workbook,
     load_uploaded_csv_file,
+    reconstructed_csv_from_rows,
     process_reports,
     rebuild_tracker_from_database,
     remove_vehicle,
@@ -147,6 +148,8 @@ def download_uploaded_csv():
     source = request.args.get("source", "")
     vehicle = request_vehicle()
     stored = load_uploaded_csv_file(OUTPUT_DIR, vehicle, source)
+    if not stored:
+        stored = reconstructed_csv_from_rows(OUTPUT_DIR, vehicle, source)
     if not stored:
         return "Uploaded CSV not found", 404
     filename, data = stored

@@ -1,5 +1,6 @@
 import argparse
 import csv
+import io
 import json
 import os
 import sqlite3
@@ -810,6 +811,25 @@ def load_uploaded_csv_file(output_dir, vehicle, source_file):
     if not row:
         return None
     return row["source_file"], bytes(row["content_bytes"])
+
+
+def reconstructed_csv_from_rows(output_dir, vehicle, source_file):
+    matching_rows = [
+        row for row in load_rows_from_database(output_dir, vehicle=vehicle)
+        if row_source_file(row) == str(source_file or "").strip()
+    ]
+    if not matching_rows:
+        return None
+    output = io.StringIO()
+    writer = csv.writer(output)
+    headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
+    writer.writerow(headers)
+    for row in matching_rows:
+        writer.writerow([row.get(header, "") for header in headers])
+    filename = source_file or "reconstructed_tracker_rows.csv"
+    if not filename.lower().endswith(".csv"):
+        filename = f"{filename}.csv"
+    return filename, output.getvalue().encode("utf-8-sig")
 
 
 def uploaded_csv_files_from_database(output_dir, vehicle=None):

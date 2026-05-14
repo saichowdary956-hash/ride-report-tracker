@@ -25,6 +25,7 @@ from ride_report_tool import (
     get_setting,
     remove_vehicle,
     load_uploaded_csv_file,
+    reconstructed_csv_from_rows,
     save_uploaded_csv_file,
     set_setting,
     source_files_from_database,
@@ -403,6 +404,7 @@ def csv_files_table_html(rows, vehicle=None, selected_source="", selected_action
             <div class="csv-detail active" data-source="{html.escape(source)}">
               <h3>{html.escape(source)}</h3>
               {action_bar}
+              <div class="muted">Download returns the original uploaded CSV when available. Older files uploaded before permanent CSV storage are downloaded as reconstructed tracker-row CSVs.</div>
               <div class="table-wrap">{detail_body}</div>
             </div>
             """
@@ -930,6 +932,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/download-uploaded-csv":
             source = query.get("source", [""])[0]
             stored = load_uploaded_csv_file(OUTPUT_DIR, vehicle, source)
+            if not stored:
+                stored = reconstructed_csv_from_rows(OUTPUT_DIR, vehicle, source)
             if not stored:
                 self.send_error(404, "Uploaded CSV not found")
                 return
