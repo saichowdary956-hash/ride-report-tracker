@@ -332,6 +332,16 @@ def set_text_cell(cell, value):
     cell.number_format = "@"
 
 
+def twelve_hour_time_text(value):
+    value = as_excel_text(value).strip()
+    if not value:
+        return ""
+    parsed = parse_time(value)
+    if not parsed:
+        return value
+    return parsed.strftime("%I:%M:%S %p").lstrip("0")
+
+
 def category_index(category_rows):
     index = defaultdict(dict)
     for row in category_rows:
@@ -977,9 +987,9 @@ def write_daily_tracker_sheet(workbook, rides, category_rows):
             elif header == "RSU Storage %":
                 set_text_cell(cell, display_value(ride.get("RSU Storage %")))
             elif header == "Session Start Time":
-                set_text_cell(cell, ride.get("Session Starttime"))
+                set_text_cell(cell, twelve_hour_time_text(ride.get("Session Starttime")))
             elif header == "Session End Time":
-                set_text_cell(cell, ride.get("Session Endtime"))
+                set_text_cell(cell, twelve_hour_time_text(ride.get("Session Endtime")))
             elif header == "Overall Session Time":
                 set_text_cell(cell, ride.get("Overall Sessiontime"))
             elif category:
@@ -1046,6 +1056,8 @@ def write_daily_rows_sheet(workbook, rows):
                 set_text_cell(cell, display_value(value))
             elif header in duration_headers:
                 set_text_cell(cell, value)
+            elif header in ("Session Start Time", "Session End Time"):
+                set_text_cell(cell, twelve_hour_time_text(value))
             else:
                 set_text_cell(cell, value)
             if header == "Z-frame Checker":
