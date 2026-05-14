@@ -94,8 +94,17 @@ def request_vehicle(default="Default"):
     return normalize_vehicle(request.values.get("vehicle") or default)
 
 
-def render_app(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", vehicle=None):
-    return page(message, processed or [], skipped or [], pending_folder=pending_folder, active_tab=active_tab, selected_source=selected_source, vehicle=vehicle or request_vehicle())
+def render_app(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", selected_csv_action="", vehicle=None):
+    return page(
+        message,
+        processed or [],
+        skipped or [],
+        pending_folder=pending_folder,
+        active_tab=active_tab,
+        selected_source=selected_source,
+        selected_csv_action=selected_csv_action,
+        vehicle=vehicle or request_vehicle(),
+    )
 
 
 @app.get("/")
@@ -104,6 +113,7 @@ def home():
     return render_app(
         active_tab=request.args.get("tab", "home"),
         selected_source=request.args.get("source", ""),
+        selected_csv_action=request.args.get("csv_action", ""),
         vehicle=vehicle,
     )
 

@@ -251,8 +251,6 @@ def browser_editor_html(rows, vehicle=None):
     </div>
     <div class="muted">Edit values in the table, then click Update on that row. Changes are saved to the tracker database and the Excel file is regenerated.</div>
     <div class="table-wrap editor-table">{tracker_table_html(rows, vehicle)}</div>
-    <h2 class="add-row-title">Add Daily Tracker Row</h2>
-    {add_row_form_html(vehicle)}
     """
 
 
@@ -320,7 +318,42 @@ def progress_table_html(rows, total_planned_hours):
     )
 
 
-def csv_files_table_html(rows, vehicle=None, selected_source=""):
+def charts_html(rows, total_planned_hours, vehicle=None):
+    total_completed = sum(parse_duration_to_hours(row.get("Overall Session Time", "")) for row in rows)
+    total_remaining = max(total_planned_hours - total_completed, 0)
+    completion = 0 if total_planned_hours <= 0 else min(total_completed / total_planned_hours * 100, 100)
+    totals_by_field = {item["Field"]: item["Total"] for item in totals_from_daily_rows(rows)}
+    bars = []
+    for category, condition, percent in BURNDOWN_ROWS:
+        field = PROGRESS_FIELD_BY_CONDITION.get(condition, condition)
+        completed_text = totals_by_field.get(field, "00:00:00")
+        completed_hours = parse_duration_to_hours(completed_text)
+        planned_hours = total_planned_hours * percent / 100
+        width = 0 if planned_hours <= 0 else min(completed_hours / planned_hours * 100, 100)
+        bars.append(
+            f"""
+            <div class="chart-row">
+              <div class="chart-label"><strong>{html.escape(condition)}</strong><span>{html.escape(category)}</span></div>
+              <div class="bar-track"><div class="bar-fill" style="width: {width:.1f}%"></div></div>
+              <div class="chart-number">{completed_hours:.1f} / {planned_hours:.1f} hrs</div>
+            </div>
+            """
+        )
+    return f"""
+    <div class="chart-summary">
+      <div class="donut" style="--done: {completion:.1f}%"><span>{completion:.1f}%</span></div>
+      <div class="chart-stats">
+        <div><strong>{total_planned_hours:.1f}</strong><span>Planned hours</span></div>
+        <div><strong>{total_completed:.1f}</strong><span>Completed hours</span></div>
+        <div><strong>{total_remaining:.1f}</strong><span>Remaining hours</span></div>
+      </div>
+    </div>
+    <div class="chart-legend"><span class="done-dot"></span>Completed <span class="left-dot"></span>Remaining</div>
+    <div class="bar-list">{''.join(bars)}</div>
+    """
+
+
+def csv_files_table_html(rows, vehicle=None, selected_source="", selected_action=""):
     if vehicle is not None:
         rows = [row for row in rows if str(row.get("Vehicle") or "Default").strip() == vehicle]
     if not rows:
@@ -336,7 +369,7 @@ def csv_files_table_html(rows, vehicle=None, selected_source=""):
         rows_by_source.setdefault(source, []).append(row)
         if source not in sources:
             sources.append(source)
-    selected = selected_source if selected_source in rows_by_source else (sources[0] if sources else "")
+    selected = selected_source if selected_source in rows_by_source else ""
     buttons = "".join(
         f"<a class='csv-select {'active' if source == selected else ''}' href='/?tab=csv-list&vehicle={quote_plus(vehicle or active_vehicle())}&source={quote_plus(source)}'>{index}. {html.escape(source)}</a>"
         for index, source in enumerate(sources, start=1)
@@ -345,23 +378,37 @@ def csv_files_table_html(rows, vehicle=None, selected_source=""):
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
     for source in ([selected] if selected else []):
         source_rows = rows_by_source[source]
-        body_rows = []
-        for row in source_rows:
-            body_rows.append(
-                "<tr>"
-                + "".join(f"<td>{html.escape(str(row.get(header, '')))}</td>" for header in headers)
-                + "</tr>"
-            )
+        body_rows = [
+            "<tr>" + "".join(f"<td>{html.escape(str(row.get(header, '')))}</td>" for header in headers) + "</tr>"
+            for row in source_rows
+        ]
+        action_bar = f"""
+          <div class="csv-actions">
+            <a class="button" href="/?tab=csv-list&vehicle={vehicle_param(vehicle)}&source={quote_plus(source)}&csv_action=edit">Edit</a>
+            <a class="button" href="/download-uploaded-csv?vehicle={vehicle_param(vehicle)}&source={quote_plus(source)}">Download</a>
+            <form action="/delete-csv?vehicle={vehicle_param(vehicle)}" method="post">
+              <input type="hidden" name="source_file" value="{html.escape(source)}">
+              <button class="danger" type="submit">Delete</button>
+            </form>
+            <a class="button secondary" href="/?tab=csv-list&vehicle={vehicle_param(vehicle)}">Close</a>
+          </div>
+        """
+        detail_body = (
+            tracker_table_html(source_rows, vehicle)
+            if selected_action == "edit"
+            else f"<table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+        )
         detail_sections.append(
             f"""
             <div class="csv-detail active" data-source="{html.escape(source)}">
               <h3>{html.escape(source)}</h3>
-              <div class="downloads"><a class="button" href="/download-uploaded-csv?vehicle={vehicle_param()}&source={quote_plus(source)}">Download Original CSV</a></div>
-              <table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>
+              {action_bar}
+              <div class="table-wrap">{detail_body}</div>
             </div>
             """
         )
-    return f"<div class='csv-file-layout'><div class='csv-file-list'>{buttons}</div><div class='csv-file-detail'>{''.join(detail_sections)}</div></div>"
+    empty_detail = "" if selected else "<p class='empty'>Select a CSV file to view actions and data.</p>"
+    return f"<div class='csv-file-layout'><div class='csv-file-list'>{buttons}</div><div class='csv-file-detail'>{empty_detail}{''.join(detail_sections)}</div></div>"
 
 
 def seconds_to_hms(seconds):
@@ -442,13 +489,13 @@ def vehicle_selector_html(vehicle=None):
     </div>"""
 
 
-def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", vehicle=None):
+def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", selected_csv_action="", vehicle=None):
     vehicle = normalize_vehicle(vehicle or active_vehicle())
     processed = processed or []
     skipped = skipped or []
     tracker_rows = current_rows(vehicle)
     planned_hours = current_planned_hours(vehicle)
-    active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress"} else "home"
+    active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress", "charts"} else "home"
     skipped_cards = "".join(
         f"<li><strong>{html.escape(item.get('file', ''))}</strong> {html.escape(item.get('message', ''))}</li>"
         for item in skipped
@@ -601,6 +648,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     .actions form {{ display: inline-flex; margin: 0 4px 4px 0; }}
     .danger {{ background: var(--danger); }}
     .danger:hover {{ background: #7a1a12; }}
+    .secondary {{ background: #5b6570; }}
+    .secondary:hover {{ background: #424a53; }}
     .add-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -685,6 +734,37 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     }}
     .csv-detail {{ display: none; }}
     .csv-detail.active {{ display: block; }}
+    .csv-actions {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0 12px; }}
+    .csv-actions form {{ margin: 0; }}
+    .chart-summary {{ display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: center; }}
+    .donut {{
+      width: 190px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: conic-gradient(#00a676 var(--done), #f0b429 0);
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      font-size: 26px;
+      font-weight: 800;
+      position: relative;
+    }}
+    .donut::after {{ content: ""; position: absolute; width: 118px; aspect-ratio: 1; border-radius: 50%; background: #fff; }}
+    .donut span {{ position: relative; z-index: 1; }}
+    .chart-stats {{ display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; }}
+    .chart-stats div {{ border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: #fff; }}
+    .chart-stats strong {{ display: block; font-size: 24px; color: var(--accent-dark); }}
+    .chart-stats span {{ color: var(--muted); font-size: 13px; }}
+    .chart-legend {{ display: flex; gap: 14px; align-items: center; margin: 16px 0; color: var(--muted); }}
+    .done-dot, .left-dot {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: -8px; }}
+    .done-dot {{ background: #00a676; }}
+    .left-dot {{ background: #f0b429; }}
+    .bar-list {{ display: grid; gap: 10px; }}
+    .chart-row {{ display: grid; grid-template-columns: 220px minmax(180px, 1fr) 150px; gap: 12px; align-items: center; }}
+    .chart-label span {{ display: block; color: var(--muted); font-size: 12px; }}
+    .bar-track {{ height: 16px; border-radius: 999px; background: #f1e0a8; overflow: hidden; }}
+    .bar-fill {{ height: 100%; border-radius: 999px; background: linear-gradient(90deg, #00a676, #3bb6d0); }}
+    .chart-number {{ font-size: 12px; color: var(--muted); text-align: right; }}
     .notice {{
       margin: 18px 0;
       padding: 12px 14px;
@@ -718,6 +798,10 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       .grid {{ grid-template-columns: 1fr; }}
       .day-columns {{ grid-template-columns: 1fr; }}
       .csv-file-layout {{ grid-template-columns: 1fr; }}
+      .chart-summary {{ grid-template-columns: 1fr; }}
+      .chart-stats {{ grid-template-columns: 1fr; }}
+      .chart-row {{ grid-template-columns: 1fr; }}
+      .chart-number {{ text-align: left; }}
     }}
   </style>
 </head>
@@ -729,6 +813,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       <button class="tab-button {'active' if active_tab == 'home' else ''}" type="button" data-tab="home">Home</button>
       <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
       <button class="tab-button {'active' if active_tab == 'progress' else ''}" type="button" data-tab="progress">Progress</button>
+      <button class="tab-button {'active' if active_tab == 'charts' else ''}" type="button" data-tab="charts">Charts</button>
     </nav>
     {db_warning}
     {notice}
@@ -763,7 +848,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         <h2>CSV files list - {html.escape(vehicle)}</h2>
         <div class="muted">Only CSV files uploaded for the selected vehicle are shown here.</div>
         <div class="downloads"><a class="button" href="/download-uploaded-csv-list?vehicle={vehicle_param(vehicle)}">Download Uploaded CSV List</a></div>
-        <div class="table-wrap">{csv_files_table_html(tracker_rows, vehicle, selected_source)}</div>
+        <div class="table-wrap">{csv_files_table_html(tracker_rows, vehicle, selected_source, selected_csv_action)}</div>
       </div>
     </section>
     <section id="progress" class="tab-panel {'active' if active_tab == 'progress' else ''}">
@@ -777,6 +862,12 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         </form>
         <div class="muted">Category percentages remain fixed. Planned and remaining hours recalculate from this value.</div>
         <div class="table-wrap">{progress_table_html(tracker_rows, planned_hours)}</div>
+      </div>
+    </section>
+    <section id="charts" class="tab-panel {'active' if active_tab == 'charts' else ''}">
+      <div class="panel">
+        <h2>Graphical Progress - {html.escape(vehicle)}</h2>
+        {charts_html(tracker_rows, planned_hours, vehicle)}
       </div>
     </section>
   </main>
@@ -811,6 +902,7 @@ class Handler(BaseHTTPRequestHandler):
         vehicle = normalize_vehicle(query.get("vehicle", [active_vehicle()])[0])
         active_tab = query.get("tab", ["home"])[0]
         selected_source = query.get("source", [""])[0]
+        selected_csv_action = query.get("csv_action", [""])[0]
         if parsed.path == "/download":
             target = tracker_path_for_vehicle(vehicle)
             rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=vehicle)
@@ -870,7 +962,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.respond_html(page(f"Could not open Excel file: {exc}", vehicle=vehicle), status=500)
             return
-        self.respond_html(page(active_tab=active_tab, selected_source=selected_source, vehicle=vehicle))
+        self.respond_html(page(active_tab=active_tab, selected_source=selected_source, selected_csv_action=selected_csv_action, vehicle=vehicle))
 
     def do_POST(self):
         parsed = urlparse(self.path)
