@@ -15,6 +15,7 @@ from ride_report_tool import (
     DAILY_TRACKER_COLUMNS,
     add_vehicle,
     add_database_row,
+    cleanup_vehicle_rows_for_uploaded_csvs,
     count_rows_in_database,
     delete_database_row,
     delete_database_rows_by_source_files,
@@ -114,7 +115,9 @@ def vehicle_param(vehicle=None):
 
 
 def current_rows(vehicle=None):
-    return load_rows_from_database(OUTPUT_DIR, vehicle=normalize_vehicle(vehicle or active_vehicle()))
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
+    cleanup_vehicle_rows_for_uploaded_csvs(OUTPUT_DIR, vehicle)
+    return load_rows_from_database(OUTPUT_DIR, vehicle=vehicle)
 
 
 def tracker_path_for_vehicle(vehicle=None):

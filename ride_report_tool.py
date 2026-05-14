@@ -1062,6 +1062,47 @@ def repair_missing_source_files_from_uploaded_csvs(output_dir, vehicle=None):
     return repaired
 
 
+def cleanup_vehicle_rows_for_uploaded_csvs(output_dir, vehicle):
+    vehicle = str(vehicle or "Default").strip() or "Default"
+    repair_missing_source_files_from_uploaded_csvs(output_dir, vehicle=vehicle)
+    active_sources = {
+        str(item.get("source_file") or "").strip()
+        for item in uploaded_csv_files_from_database(output_dir, vehicle=vehicle)
+        if str(item.get("source_file") or "").strip()
+    }
+    now = datetime.now().isoformat(timespec="seconds")
+    deleted = 0
+    repaired = 0
+    with connect_tracker_db(output_dir) as conn:
+        rows = conn.execute(
+            "SELECT id, source_file, data_json FROM daily_rows WHERE vehicle = ?",
+            (vehicle,),
+        ).fetchall()
+        for row in rows:
+            try:
+                data = json.loads(row["data_json"])
+            except (TypeError, json.JSONDecodeError):
+                data = {}
+            source_file = str(row["source_file"] or data.get("Source File") or "").strip()
+            if source_file and not row["source_file"]:
+                data["Source File"] = source_file
+                conn.execute(
+                    "UPDATE daily_rows SET source_file = ?, data_json = ?, updated_at = ? WHERE id = ?",
+                    (source_file, json.dumps(data, default=str), now, row["id"]),
+                )
+                repaired += 1
+            if not source_file or source_file not in active_sources:
+                conn.execute("DELETE FROM daily_rows WHERE id = ?", (row["id"],))
+                deleted += 1
+        if repaired or deleted:
+            conn.execute(
+                "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+                ("cleanup-vehicle-uploaded-csvs", None, f"{repaired} repaired; {deleted} deleted for {vehicle}", now),
+            )
+        conn.commit()
+    return {"repaired": repaired, "deleted": deleted}
+
+
 def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None):
     source_set = {str(source or "").strip() for source in source_files if str(source or "").strip()}
     if not source_set:
@@ -1088,6 +1129,8 @@ def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None)
 
 
 def source_files_from_database(output_dir, vehicle=None):
+    if vehicle is not None:
+        cleanup_vehicle_rows_for_uploaded_csvs(output_dir, vehicle)
     with connect_tracker_db(output_dir) as conn:
         if vehicle is None:
             rows = conn.execute(
@@ -1330,6 +1373,8 @@ def build_tracker_from_daily_rows(tracker_path, rows):
 
 def rebuild_tracker_from_database(output_dir, tracker_name="daily_tracker.xlsx", vehicle=None):
     output_dir = Path(output_dir)
+    if vehicle is not None:
+        cleanup_vehicle_rows_for_uploaded_csvs(output_dir, vehicle)
     rows = load_rows_from_database(output_dir, vehicle=vehicle)
     tracker_path = output_dir / tracker_name
     backup_file(tracker_path)
