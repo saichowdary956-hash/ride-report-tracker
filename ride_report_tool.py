@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import re
 import shutil
+import tempfile
 from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -988,10 +989,84 @@ def delete_database_row(output_dir, row_id):
         conn.commit()
 
 
+def repair_missing_source_files_from_uploaded_csvs(output_dir, vehicle=None):
+    repaired = 0
+    uploads = uploaded_csv_files_from_database(output_dir, vehicle=vehicle)
+    if not uploads:
+        return repaired
+    with tempfile.TemporaryDirectory(prefix="ride_csv_repair_") as tmp_dir:
+        tmp_dir = Path(tmp_dir)
+        source_by_row_id = {}
+        for item in uploads:
+            item_vehicle = item.get("vehicle") or vehicle or "Default"
+            source_file = item.get("source_file", "")
+            stored = load_uploaded_csv_file(output_dir, item_vehicle, source_file)
+            if not stored:
+                continue
+            filename, content = stored
+            csv_path = tmp_dir / filename
+            csv_path.write_bytes(content)
+            try:
+                ride, categories = parse_report(csv_path, allow_partial=True)
+            except Exception:
+                continue
+            category_rows = []
+            for category in categories:
+                category_rows.append(
+                    {
+                        "Source File": ride.get("Source File", filename),
+                        "Full Drive ID": ride.get("Full Drive ID", ""),
+                        "Drive id": ride.get("Drive id", ""),
+                        "Date": ride.get("Date"),
+                        "RSU No": ride.get("RSU No", ""),
+                        "Category": category["category"],
+                        "Label": category["label"],
+                        "Duration": category["duration_text"],
+                        "Minutes": duration_minutes(category["duration"]),
+                    }
+                )
+            for row in daily_rows_from_data([ride], category_rows):
+                row["Vehicle"] = item_vehicle
+                source_by_row_id[daily_row_id(row)] = source_file
+        if not source_by_row_id:
+            return repaired
+        with connect_tracker_db(output_dir) as conn:
+            placeholders = ", ".join("?" for _ in source_by_row_id)
+            existing_rows = conn.execute(
+                f"SELECT id, source_file, data_json FROM daily_rows WHERE id IN ({placeholders})",
+                list(source_by_row_id),
+            ).fetchall()
+            now = datetime.now().isoformat(timespec="seconds")
+            for existing in existing_rows:
+                if str(existing["source_file"] or "").strip():
+                    continue
+                source_file = source_by_row_id.get(existing["id"], "")
+                if not source_file:
+                    continue
+                try:
+                    data = json.loads(existing["data_json"])
+                except (TypeError, json.JSONDecodeError):
+                    data = {}
+                data["Source File"] = source_file
+                conn.execute(
+                    "UPDATE daily_rows SET source_file = ?, data_json = ?, updated_at = ? WHERE id = ?",
+                    (source_file, json.dumps(data, default=str), now, existing["id"]),
+                )
+                repaired += 1
+            if repaired:
+                conn.execute(
+                    "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+                    ("repair-source-files", None, f"{repaired} row(s)", now),
+                )
+            conn.commit()
+    return repaired
+
+
 def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None):
     source_set = {str(source or "").strip() for source in source_files if str(source or "").strip()}
     if not source_set:
         return 0
+    repair_missing_source_files_from_uploaded_csvs(output_dir, vehicle=vehicle)
     now = datetime.now().isoformat(timespec="seconds")
     with connect_tracker_db(output_dir) as conn:
         placeholders = ", ".join("?" for _ in source_set)
