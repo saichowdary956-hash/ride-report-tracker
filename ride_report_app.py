@@ -25,6 +25,7 @@ from ride_report_tool import (
     get_setting,
     remove_vehicle,
     load_uploaded_csv_file,
+    refresh_uploaded_csv_from_rows,
     reconstructed_csv_from_rows,
     save_uploaded_csv_file,
     set_setting,
@@ -172,7 +173,7 @@ def parse_multipart(body, content_type):
     return files
 
 
-def tracker_table_html(rows, vehicle=None):
+def tracker_table_html(rows, vehicle=None, return_tab="excel-editor", source=""):
     if not rows:
         return "<p class='empty'>No rows yet.</p>"
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
@@ -193,6 +194,8 @@ def tracker_table_html(rows, vehicle=None):
         <td class="actions">
           <form id="edit-{row_id}" action="/row/update?vehicle={vehicle_param(vehicle)}" method="post">
             <input type="hidden" name="row_id" value="{row_id}">
+            <input type="hidden" name="return_tab" value="{html.escape(return_tab)}">
+            <input type="hidden" name="source" value="{html.escape(source)}">
             <button type="submit">Update</button>
           </form>
           <form action="/row/delete?vehicle={vehicle_param(vehicle)}" method="post">
@@ -392,7 +395,7 @@ def csv_files_table_html(rows, vehicle=None, selected_source="", selected_action
           </div>
         """
         detail_body = (
-            tracker_table_html(source_rows, vehicle)
+            tracker_table_html(source_rows, vehicle, return_tab="csv-list", source=source)
             if selected_action == "edit"
             else f"<table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
         )
@@ -969,6 +972,8 @@ class Handler(BaseHTTPRequestHandler):
         request_path = parsed.path
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
+        selected_source = ""
+        selected_csv_action = ""
         try:
             if request_path == "/upload":
                 csv_paths = parse_multipart(body, self.headers.get("Content-Type", ""))
@@ -1003,12 +1008,15 @@ class Handler(BaseHTTPRequestHandler):
                 row = row_from_form(form)
                 row["Vehicle"] = vehicle
                 update_database_row(OUTPUT_DIR, row_id, row)
+                refresh_uploaded_csv_from_rows(OUTPUT_DIR, vehicle, row.get("Source File", ""))
                 rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
-                message = "Row updated and saved to the tracker database."
+                message = "Row updated in the stored CSV data and the Excel tracker."
                 pending_folder = ""
-                active_tab = "excel-editor"
+                active_tab = form.get("return_tab", ["excel-editor"])[0] or "excel-editor"
+                selected_source = form.get("source", [""])[0]
+                selected_csv_action = "edit" if active_tab == "csv-list" and selected_source else ""
             elif request_path == "/row/delete":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
@@ -1112,7 +1120,18 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "Not found")
                 return
-            self.respond_html(page(message, processed, skipped, pending_folder=pending_folder, active_tab=active_tab, vehicle=vehicle))
+            self.respond_html(
+                page(
+                    message,
+                    processed,
+                    skipped,
+                    pending_folder=pending_folder,
+                    active_tab=active_tab,
+                    selected_source=selected_source,
+                    selected_csv_action=selected_csv_action,
+                    vehicle=vehicle,
+                )
+            )
         except Exception as exc:
             self.respond_html(page(f"Could not process reports: {exc}", vehicle=vehicle), status=500)
 

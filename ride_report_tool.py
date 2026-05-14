@@ -832,6 +832,15 @@ def reconstructed_csv_from_rows(output_dir, vehicle, source_file):
     return filename, output.getvalue().encode("utf-8-sig")
 
 
+def refresh_uploaded_csv_from_rows(output_dir, vehicle, source_file):
+    reconstructed = reconstructed_csv_from_rows(output_dir, vehicle, source_file)
+    if not reconstructed:
+        return False
+    filename, data = reconstructed
+    save_uploaded_csv_file(output_dir, vehicle, filename, data)
+    return True
+
+
 def uploaded_csv_files_from_database(output_dir, vehicle=None):
     with connect_tracker_db(output_dir) as conn:
         if vehicle is None:

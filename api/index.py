@@ -33,6 +33,7 @@ from ride_report_tool import (
     load_uploaded_csv_file,
     reconstructed_csv_from_rows,
     process_reports,
+    refresh_uploaded_csv_from_rows,
     rebuild_tracker_from_database,
     remove_vehicle,
     save_uploaded_csv_file,
@@ -211,8 +212,18 @@ def row_update():
     row = row_from_form(form)
     row["Vehicle"] = vehicle
     update_database_row(OUTPUT_DIR, form.get("row_id", [""])[0], row)
+    refresh_uploaded_csv_from_rows(OUTPUT_DIR, vehicle, row.get("Source File", ""))
     rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
-    return render_app("Row updated and saved to the tracker database.", active_tab="excel-editor", vehicle=vehicle)
+    active_tab = form.get("return_tab", ["excel-editor"])[0] or "excel-editor"
+    selected_source = form.get("source", [""])[0]
+    selected_action = "edit" if active_tab == "csv-list" and selected_source else ""
+    return render_app(
+        "Row updated in the stored CSV data and the Excel tracker.",
+        active_tab=active_tab,
+        selected_source=selected_source,
+        selected_csv_action=selected_action,
+        vehicle=vehicle,
+    )
 
 
 @app.post("/row/delete")
