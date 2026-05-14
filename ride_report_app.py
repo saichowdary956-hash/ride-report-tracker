@@ -219,7 +219,7 @@ def browser_editor_html(rows):
     return f"""
     <div class="editor-actions">
       <a class="button" href="/download?vehicle={vehicle_param()}">Download Excel Copy</a>
-      <form action="/sync-excel?vehicle={vehicle_param()}" method="post" class="inline-action">
+      <form action="/refresh-totals?vehicle={vehicle_param()}" method="post" class="inline-action">
         <button type="submit">Refresh Totals</button>
       </form>
     </div>
@@ -716,8 +716,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         </div>
         <div>
           <a class="button" href="/?tab=excel-editor&vehicle={vehicle_param()}">Edit Excel File</a>
-          <form action="/sync-excel?vehicle={vehicle_param()}" method="post" class="inline-action">
-            <button type="submit">Update Totals from Excel</button>
+          <form action="/refresh-totals?vehicle={vehicle_param()}" method="post" class="inline-action">
+            <button type="submit">Refresh Totals</button>
           </form>
         </div>
       </div>
@@ -894,6 +894,13 @@ class Handler(BaseHTTPRequestHandler):
                 processed = []
                 skipped = []
                 message = f"Synced {len(rows)} Excel row(s) to the tracker database. If Excel is open locally, save and close it before syncing again to rewrite recalculated totals into the workbook."
+                pending_folder = ""
+                active_tab = "excel-editor"
+            elif request_path == "/refresh-totals":
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                processed = []
+                skipped = []
+                message = "Totals refreshed from stored database rows. No uploaded CSV data was changed."
                 pending_folder = ""
                 active_tab = "excel-editor"
             elif request_path == "/delete-csv":

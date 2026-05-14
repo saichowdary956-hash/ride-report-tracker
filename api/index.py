@@ -187,6 +187,12 @@ def sync_excel():
     return render_app(f"Synced {len(rows)} Excel row(s) to the tracker database.", active_tab="excel-editor")
 
 
+@app.post("/refresh-totals")
+def refresh_totals():
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+    return render_app("Totals refreshed from stored database rows. No uploaded CSV data was changed.", active_tab="excel-editor")
+
+
 @app.post("/delete-csv")
 def delete_csv():
     selected_sources = request.form.getlist("source_file")
