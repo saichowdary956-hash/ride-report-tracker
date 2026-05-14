@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
 import argparse
 import csv
+from datetime import date
 import html
 import io
 import mimetypes
@@ -120,6 +121,11 @@ def tracker_path_for_vehicle(vehicle=None):
     vehicle = normalize_vehicle(vehicle or active_vehicle())
     safe_vehicle = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in vehicle)
     return OUTPUT_DIR / f"daily_tracker_{safe_vehicle}.xlsx"
+
+
+def dated_excel_filename(path):
+    path = Path(path)
+    return f"{path.stem}_{date.today().strftime('%Y-%m-%d')}{path.suffix}"
 
 
 def active_tracker_path():
@@ -909,9 +915,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404, "File not found")
                 return
             data = target.read_bytes()
+            filename = dated_excel_filename(target)
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -950,9 +957,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not can_open_excel_locally():
                 data = target.read_bytes()
+                filename = dated_excel_filename(target)
                 self.send_response(200)
                 self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)

@@ -18,6 +18,7 @@ from ride_report_app import (
     OUTPUT_DIR,
     UPLOAD_DIR,
     DEFAULT_TOTAL_PLANNED_HOURS,
+    dated_excel_filename,
     normalize_vehicle,
     page,
     row_from_form,
@@ -125,7 +126,7 @@ def download():
     vehicle = request_vehicle()
     target = tracker_path_for_vehicle(vehicle)
     rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=vehicle)
-    return send_file(target, as_attachment=True, download_name=target.name)
+    return send_file(target, as_attachment=True, download_name=dated_excel_filename(target))
 
 
 @app.get("/download-uploaded-csv-list")
