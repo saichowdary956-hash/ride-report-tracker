@@ -472,6 +472,18 @@ def upsert_setting_sql():
     """
 
 
+def upsert_uploaded_csv_sql():
+    return """
+        INSERT INTO uploaded_csv_files (id, vehicle, source_file, content_bytes, uploaded_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            vehicle = excluded.vehicle,
+            source_file = excluded.source_file,
+            content_bytes = excluded.content_bytes,
+            updated_at = excluded.updated_at
+    """
+
+
 class PostgresConnection:
     def __init__(self, conn):
         self.conn = conn
@@ -547,6 +559,19 @@ def connect_postgres_tracker_db():
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS uploaded_csv_files (
+            id TEXT PRIMARY KEY,
+            vehicle TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            content_bytes BYTEA NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(vehicle, source_file)
+        )
+        """
+    )
+    db.execute(
+        """
         UPDATE daily_rows
         SET
             vehicle = COALESCE(NULLIF(vehicle, ''), COALESCE(NULLIF(data_json::jsonb ->> 'Vehicle', ''), 'Default')),
@@ -559,6 +584,8 @@ def connect_postgres_tracker_db():
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_position ON daily_rows (vehicle, position)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_source ON daily_rows (vehicle, source_file)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_vehicle_source ON uploaded_csv_files (vehicle, source_file)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_uploaded_at ON uploaded_csv_files (uploaded_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     db.commit()
     return db
@@ -621,6 +648,19 @@ def connect_tracker_db(output_dir):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS uploaded_csv_files (
+            id TEXT PRIMARY KEY,
+            vehicle TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            content_bytes BLOB NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(vehicle, source_file)
+        )
+        """
+    )
     for item in conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle IS NULL OR source_file IS NULL OR drive_id IS NULL").fetchall():
         data = json.loads(item["data_json"])
         conn.execute(
@@ -631,6 +671,8 @@ def connect_tracker_db(output_dir):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_position ON daily_rows (vehicle, position)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_source ON daily_rows (vehicle, source_file)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_vehicle_source ON uploaded_csv_files (vehicle, source_file)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_uploaded_at ON uploaded_csv_files (uploaded_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     conn.commit()
     return conn
@@ -732,6 +774,72 @@ def row_source_file(row):
 
 def row_drive_id(row):
     return str(row.get("Drive ID") or row.get("Full Drive ID") or row.get("Drive id") or "").strip()
+
+
+def uploaded_csv_id(vehicle, source_file):
+    return f"{str(vehicle or 'Default').strip() or 'Default'}::{str(source_file or '').strip()}"
+
+
+def save_uploaded_csv_file(output_dir, vehicle, source_file, content_bytes):
+    vehicle = str(vehicle or "Default").strip() or "Default"
+    source_file = str(source_file or "").strip()
+    if not source_file:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect_tracker_db(output_dir) as conn:
+        current = conn.execute("SELECT uploaded_at FROM uploaded_csv_files WHERE id = ?", (uploaded_csv_id(vehicle, source_file),)).fetchone()
+        uploaded_at = current["uploaded_at"] if current else now
+        conn.execute(
+            upsert_uploaded_csv_sql(),
+            (uploaded_csv_id(vehicle, source_file), vehicle, source_file, content_bytes, uploaded_at, now),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+            ("store-uploaded-csv", uploaded_csv_id(vehicle, source_file), source_file, now),
+        )
+        conn.commit()
+
+
+def load_uploaded_csv_file(output_dir, vehicle, source_file):
+    with connect_tracker_db(output_dir) as conn:
+        row = conn.execute(
+            "SELECT source_file, content_bytes FROM uploaded_csv_files WHERE vehicle = ? AND source_file = ?",
+            (vehicle, source_file),
+        ).fetchone()
+    if not row:
+        return None
+    return row["source_file"], bytes(row["content_bytes"])
+
+
+def uploaded_csv_files_from_database(output_dir, vehicle=None):
+    with connect_tracker_db(output_dir) as conn:
+        if vehicle is None:
+            rows = conn.execute(
+                "SELECT vehicle, source_file, uploaded_at, updated_at FROM uploaded_csv_files ORDER BY uploaded_at, source_file"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT vehicle, source_file, uploaded_at, updated_at FROM uploaded_csv_files WHERE vehicle = ? ORDER BY uploaded_at, source_file",
+                (vehicle,),
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_uploaded_csv_files_by_source_files(output_dir, source_files, vehicle=None):
+    source_set = {str(source or "").strip() for source in source_files if str(source or "").strip()}
+    if not source_set:
+        return 0
+    placeholders = ", ".join("?" for _ in source_set)
+    params = list(source_set)
+    with connect_tracker_db(output_dir) as conn:
+        if vehicle is None:
+            count_row = conn.execute(f"SELECT COUNT(*) AS count FROM uploaded_csv_files WHERE source_file IN ({placeholders})", params).fetchone()
+            conn.execute(f"DELETE FROM uploaded_csv_files WHERE source_file IN ({placeholders})", params)
+        else:
+            count_row = conn.execute(f"SELECT COUNT(*) AS count FROM uploaded_csv_files WHERE vehicle = ? AND source_file IN ({placeholders})", [vehicle] + params).fetchone()
+            conn.execute(f"DELETE FROM uploaded_csv_files WHERE vehicle = ? AND source_file IN ({placeholders})", [vehicle] + params)
+        conn.commit()
+    return int(count_row["count"] or 0) if count_row else 0
 
 
 def save_rows_to_database(output_dir, rows, action="sync", vehicle=None):
@@ -856,6 +964,7 @@ def delete_database_rows_by_source_files(output_dir, source_files, vehicle=None)
             ("delete-source-files", None, f"{deleted} row(s)", now),
         )
         conn.commit()
+    delete_uploaded_csv_files_by_source_files(output_dir, source_set, vehicle=vehicle)
     return deleted
 
 

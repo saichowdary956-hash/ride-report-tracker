@@ -2,7 +2,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
 import argparse
+import csv
 import html
+import io
 import mimetypes
 import os
 import webbrowser
@@ -22,11 +24,14 @@ from ride_report_tool import (
     rebuild_tracker_from_database,
     get_setting,
     remove_vehicle,
+    load_uploaded_csv_file,
+    save_uploaded_csv_file,
     set_setting,
     source_files_from_database,
     sync_database_from_tracker,
     totals_from_daily_rows,
     update_database_row,
+    uploaded_csv_files_from_database,
     vehicles_from_database,
     safe_load_workbook,
 )
@@ -120,7 +125,17 @@ def process_csv_paths(csv_paths, allow_partial=False):
         target = staging / csv_path.name
         if csv_path.resolve() != target.resolve():
             target.write_bytes(csv_path.read_bytes())
+        save_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), target.name, target.read_bytes())
     return process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=allow_partial, vehicle=active_vehicle())
+
+
+def uploaded_csv_list_bytes(vehicle):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Vehicle", "CSV File", "Uploaded At", "Updated At"])
+    for item in uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=vehicle):
+        writer.writerow([item.get("vehicle", ""), item.get("source_file", ""), item.get("uploaded_at", ""), item.get("updated_at", "")])
+    return output.getvalue().encode("utf-8-sig")
 
 
 def parse_multipart(body, content_type):
@@ -329,6 +344,7 @@ def csv_files_table_html(rows, vehicle=None, selected_source=""):
             f"""
             <div class="csv-detail active" data-source="{html.escape(source)}">
               <h3>{html.escape(source)}</h3>
+              <div class="downloads"><a class="button" href="/download-uploaded-csv?vehicle={vehicle_param()}&source={quote_plus(source)}">Download Original CSV</a></div>
               <table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>
             </div>
             """
@@ -732,6 +748,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       <div class="panel">
         <h2>CSV files list - {html.escape(active_vehicle())}</h2>
         <div class="muted">Only CSV files uploaded for the selected vehicle are shown here.</div>
+        <div class="downloads"><a class="button" href="/download-uploaded-csv-list?vehicle={vehicle_param()}">Download Uploaded CSV List</a></div>
         <div class="table-wrap">{csv_files_table_html(tracker_rows, active_vehicle(), selected_source)}</div>
       </div>
     </section>
@@ -792,6 +809,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
             self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if parsed.path == "/download-uploaded-csv-list":
+            data = uploaded_csv_list_bytes(active_vehicle())
+            filename = f"uploaded_csv_files_{active_vehicle()}.csv"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if parsed.path == "/download-uploaded-csv":
+            source = query.get("source", [""])[0]
+            stored = load_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), source)
+            if not stored:
+                self.send_error(404, "Uploaded CSV not found")
+                return
+            filename, data = stored
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

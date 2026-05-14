@@ -1,6 +1,8 @@
 import os
 import sys
 import traceback
+import csv
+import io
 from pathlib import Path
 
 os.environ.setdefault("RIDE_REPORT_BASE_DIR", "/tmp/ride-report-tracker")
@@ -28,11 +30,14 @@ from ride_report_tool import (
     delete_database_row,
     delete_database_rows_by_source_files,
     import_tracker_workbook,
+    load_uploaded_csv_file,
     process_reports,
     rebuild_tracker_from_database,
     remove_vehicle,
+    save_uploaded_csv_file,
     set_setting,
     update_database_row,
+    uploaded_csv_files_from_database,
 )
 
 app = Flask(__name__)
@@ -114,6 +119,35 @@ def download():
     return send_file(target, as_attachment=True, download_name=target.name)
 
 
+@app.get("/download-uploaded-csv-list")
+def download_uploaded_csv_list():
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Vehicle", "CSV File", "Uploaded At", "Updated At"])
+    for item in uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=active_vehicle()):
+        writer.writerow([item.get("vehicle", ""), item.get("source_file", ""), item.get("uploaded_at", ""), item.get("updated_at", "")])
+    data = output.getvalue().encode("utf-8-sig")
+    return app.response_class(
+        data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="uploaded_csv_files_{active_vehicle()}.csv"'},
+    )
+
+
+@app.get("/download-uploaded-csv")
+def download_uploaded_csv():
+    source = request.args.get("source", "")
+    stored = load_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), source)
+    if not stored:
+        return "Uploaded CSV not found", 404
+    filename, data = stored
+    return app.response_class(
+        data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/open-excel")
 def open_excel():
     return redirect("/?tab=excel-editor")
@@ -130,6 +164,7 @@ def upload():
         if uploaded and uploaded.filename.lower().endswith(".csv"):
             target = staging / Path(uploaded.filename).name
             uploaded.save(target)
+            save_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), target.name, target.read_bytes())
             csv_paths.append(target)
     if not csv_paths:
         return render_app("No CSV files were received. Please choose one or more .csv files.", active_tab="home")
