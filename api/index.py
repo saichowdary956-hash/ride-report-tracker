@@ -244,8 +244,7 @@ def sync_excel():
 @app.post("/refresh-totals")
 def refresh_totals():
     vehicle = request_vehicle()
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
-    return render_app("Totals refreshed from stored database rows. No uploaded CSV data was changed.", active_tab="excel-editor", vehicle=vehicle)
+    return render_app("Refresh Totals was removed because totals update automatically when you upload, edit, or delete CSV data.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/delete-csv")

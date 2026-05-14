@@ -246,9 +246,6 @@ def browser_editor_html(rows, vehicle=None):
     return f"""
     <div class="editor-actions">
       <a class="button" href="/download?vehicle={vehicle_param(vehicle)}">Download Excel Copy</a>
-      <form action="/refresh-totals?vehicle={vehicle_param(vehicle)}" method="post" class="inline-action">
-        <button type="submit">Refresh Totals</button>
-      </form>
     </div>
     <div class="muted">Edit values in the table, then click Update on that row. Changes are saved to the tracker database and the Excel file is regenerated.</div>
     <div class="table-wrap editor-table">{tracker_table_html(rows, vehicle)}</div>
@@ -833,9 +830,6 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         </div>
         <div>
           <a class="button" href="/?tab=excel-editor&vehicle={vehicle_param(vehicle)}">Edit Excel File</a>
-          <form action="/refresh-totals?vehicle={vehicle_param(vehicle)}" method="post" class="inline-action">
-            <button type="submit">Refresh Totals</button>
-          </form>
         </div>
       </div>
     </section>
@@ -1044,10 +1038,9 @@ class Handler(BaseHTTPRequestHandler):
                 pending_folder = ""
                 active_tab = "excel-editor"
             elif request_path == "/refresh-totals":
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
-                message = "Totals refreshed from stored database rows. No uploaded CSV data was changed."
+                message = "Refresh Totals was removed because totals update automatically when you upload, edit, or delete CSV data."
                 pending_folder = ""
                 active_tab = "excel-editor"
             elif request_path == "/delete-csv":

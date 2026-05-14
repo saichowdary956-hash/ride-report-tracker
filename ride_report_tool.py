@@ -904,7 +904,21 @@ def load_rows_from_database(output_dir, vehicle=None):
 def update_database_row(output_dir, row_id, row_data):
     now = datetime.now().isoformat(timespec="seconds")
     with connect_tracker_db(output_dir) as conn:
-        current = conn.execute("SELECT position FROM daily_rows WHERE id = ?", (row_id,)).fetchone()
+        current = conn.execute("SELECT position, vehicle, source_file, data_json FROM daily_rows WHERE id = ?", (row_id,)).fetchone()
+        existing_data = {}
+        if current and current["data_json"]:
+            try:
+                existing_data = json.loads(current["data_json"])
+            except (TypeError, json.JSONDecodeError):
+                existing_data = {}
+        if current:
+            row_data["Source File"] = str(
+                existing_data.get("Source File") or current["source_file"] or row_data.get("Source File") or ""
+            ).strip()
+            if not row_data.get("Uploaded Date"):
+                row_data["Uploaded Date"] = existing_data.get("Uploaded Date", "")
+            if not row_data.get("Vehicle"):
+                row_data["Vehicle"] = existing_data.get("Vehicle") or current["vehicle"] or ""
         position = current["position"] if current else (conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM daily_rows").fetchone()["next_pos"])
         new_id = daily_row_id(row_data)
         conn.execute("DELETE FROM daily_rows WHERE id = ?", (row_id,))
