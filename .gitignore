@@ -4,6 +4,7 @@ __pycache__/
 venv/
 outputs/
 uploads/
+dist/
 *.sqlite
 *.db
 .env
