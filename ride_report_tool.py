@@ -754,6 +754,7 @@ def remove_vehicle(output_dir, vehicle):
     save_rows_to_database(output_dir, kept_rows, action="remove-vehicle")
     with connect_tracker_db(output_dir) as conn:
         conn.execute("DELETE FROM settings WHERE key LIKE ?", (f"vehicle::{vehicle}::%",))
+        conn.execute("DELETE FROM uploaded_csv_files WHERE vehicle = ?", (vehicle,))
         conn.commit()
     return deleted
 

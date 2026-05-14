@@ -98,24 +98,34 @@ def active_vehicle():
     return get_setting(OUTPUT_DIR, "active_vehicle", "Default") or "Default"
 
 
+def normalize_vehicle(vehicle):
+    return str(vehicle or "").strip() or "Default"
+
+
 def vehicle_setting_key(vehicle, key):
     return f"vehicle::{vehicle}::{key}"
 
 
-def vehicle_param():
-    return quote_plus(active_vehicle())
+def vehicle_param(vehicle=None):
+    return quote_plus(normalize_vehicle(vehicle or active_vehicle()))
 
 
-def current_rows():
-    return load_rows_from_database(OUTPUT_DIR, vehicle=active_vehicle())
+def current_rows(vehicle=None):
+    return load_rows_from_database(OUTPUT_DIR, vehicle=normalize_vehicle(vehicle or active_vehicle()))
 
 
-def active_tracker_path():
-    safe_vehicle = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in active_vehicle())
+def tracker_path_for_vehicle(vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
+    safe_vehicle = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in vehicle)
     return OUTPUT_DIR / f"daily_tracker_{safe_vehicle}.xlsx"
 
 
-def process_csv_paths(csv_paths, allow_partial=False):
+def active_tracker_path():
+    return tracker_path_for_vehicle(active_vehicle())
+
+
+def process_csv_paths(csv_paths, allow_partial=False, vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
     staging = UPLOAD_DIR / "_last_batch"
     if staging.exists():
         for old_file in staging.glob("*.csv"):
@@ -125,8 +135,8 @@ def process_csv_paths(csv_paths, allow_partial=False):
         target = staging / csv_path.name
         if csv_path.resolve() != target.resolve():
             target.write_bytes(csv_path.read_bytes())
-        save_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), target.name, target.read_bytes())
-    return process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=allow_partial, vehicle=active_vehicle())
+        save_uploaded_csv_file(OUTPUT_DIR, vehicle, target.name, target.read_bytes())
+    return process_reports(staging, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, allow_partial=allow_partial, vehicle=vehicle)
 
 
 def uploaded_csv_list_bytes(vehicle):
@@ -161,7 +171,7 @@ def parse_multipart(body, content_type):
     return files
 
 
-def tracker_table_html(rows):
+def tracker_table_html(rows, vehicle=None):
     if not rows:
         return "<p class='empty'>No rows yet.</p>"
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
@@ -180,11 +190,11 @@ def tracker_table_html(rows):
             )
         actions = f"""
         <td class="actions">
-          <form id="edit-{row_id}" action="/row/update?vehicle={vehicle_param()}" method="post">
+          <form id="edit-{row_id}" action="/row/update?vehicle={vehicle_param(vehicle)}" method="post">
             <input type="hidden" name="row_id" value="{row_id}">
             <button type="submit">Update</button>
           </form>
-          <form action="/row/delete?vehicle={vehicle_param()}" method="post">
+          <form action="/row/delete?vehicle={vehicle_param(vehicle)}" method="post">
             <input type="hidden" name="row_id" value="{row_id}">
             <button class="danger" type="submit">Delete</button>
           </form>
@@ -217,31 +227,32 @@ def daily_tracker_table_html(rows):
     return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
-def add_row_form_html():
+def add_row_form_html(vehicle=None):
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
     inputs = "".join(
         f"<label>{html.escape(header)}<input name=\"{html.escape(header)}\" placeholder=\"{html.escape(header)}\"></label>"
         for header in headers
     )
     return f"""
-    <form action="/row/add?vehicle={vehicle_param()}" method="post" class="add-grid">
+    <form action="/row/add?vehicle={vehicle_param(vehicle)}" method="post" class="add-grid">
       {inputs}
       <button type="submit">Add Row</button>
     </form>"""
 
 
-def browser_editor_html(rows):
+def browser_editor_html(rows, vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
     return f"""
     <div class="editor-actions">
-      <a class="button" href="/download?vehicle={vehicle_param()}">Download Excel Copy</a>
-      <form action="/refresh-totals?vehicle={vehicle_param()}" method="post" class="inline-action">
+      <a class="button" href="/download?vehicle={vehicle_param(vehicle)}">Download Excel Copy</a>
+      <form action="/refresh-totals?vehicle={vehicle_param(vehicle)}" method="post" class="inline-action">
         <button type="submit">Refresh Totals</button>
       </form>
     </div>
     <div class="muted">Edit values in the table, then click Update on that row. Changes are saved to the tracker database and the Excel file is regenerated.</div>
-    <div class="table-wrap editor-table">{tracker_table_html(rows)}</div>
+    <div class="table-wrap editor-table">{tracker_table_html(rows, vehicle)}</div>
     <h2 class="add-row-title">Add Daily Tracker Row</h2>
-    {add_row_form_html()}
+    {add_row_form_html(vehicle)}
     """
 
 
@@ -272,8 +283,9 @@ def parse_duration_to_hours(value):
     return hours + minutes / 60 + seconds / 3600
 
 
-def current_planned_hours():
-    raw_value = get_setting(OUTPUT_DIR, vehicle_setting_key(active_vehicle(), "total_planned_hours"), str(DEFAULT_TOTAL_PLANNED_HOURS))
+def current_planned_hours(vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
+    raw_value = get_setting(OUTPUT_DIR, vehicle_setting_key(vehicle, "total_planned_hours"), str(DEFAULT_TOTAL_PLANNED_HOURS))
     try:
         return float(raw_value)
     except ValueError:
@@ -369,8 +381,9 @@ def row_from_form(form):
     return row
 
 
-def source_delete_form_html():
-    sources = source_files_from_database(OUTPUT_DIR, vehicle=active_vehicle())
+def source_delete_form_html(vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
+    sources = source_files_from_database(OUTPUT_DIR, vehicle=vehicle)
     if not sources:
         return """
     <form class="delete-csv-form">
@@ -385,14 +398,14 @@ def source_delete_form_html():
         for source in sources
     )
     return f"""
-    <form action="/delete-csv?vehicle={vehicle_param()}" method="post" class="delete-csv-form">
+    <form action="/delete-csv?vehicle={vehicle_param(vehicle)}" method="post" class="delete-csv-form">
       <div class="source-list">{options}</div>
       <button class="danger" type="submit">Delete CSV Files</button>
     </form>"""
 
 
-def vehicle_selector_html():
-    current = active_vehicle()
+def vehicle_selector_html(vehicle=None):
+    current = normalize_vehicle(vehicle or active_vehicle())
     vehicles = vehicles_from_database(OUTPUT_DIR)
     if current not in vehicles:
         vehicles.insert(0, current)
@@ -424,16 +437,17 @@ def vehicle_selector_html():
         <strong>Active vehicle: {html.escape(current)}</strong>
         <span>{len(active_sources)} CSV file(s)</span>
         <span>{active_row_count} tracker row(s)</span>
-        <span>{html.escape(active_tracker_path().name)}</span>
+        <span>{html.escape(tracker_path_for_vehicle(current).name)}</span>
       </div>
     </div>"""
 
 
-def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source=""):
+def page(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
     processed = processed or []
     skipped = skipped or []
-    tracker_rows = current_rows()
-    planned_hours = current_planned_hours()
+    tracker_rows = current_rows(vehicle)
+    planned_hours = current_planned_hours(vehicle)
     active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress"} else "home"
     skipped_cards = "".join(
         f"<li><strong>{html.escape(item.get('file', ''))}</strong> {html.escape(item.get('message', ''))}</li>"
@@ -709,8 +723,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
 </head>
 <body>
   <main>
-    {vehicle_selector_html()}
-    <div class="active-vehicle-banner">Showing data only for: {html.escape(active_vehicle())}</div>
+    {vehicle_selector_html(vehicle)}
+    <div class="active-vehicle-banner">Showing data only for: {html.escape(vehicle)}</div>
     <nav class="tabs">
       <button class="tab-button {'active' if active_tab == 'home' else ''}" type="button" data-tab="home">Home</button>
       <button class="tab-button {'active' if active_tab == 'csv-list' else ''}" type="button" data-tab="csv-list">CSV Files</button>
@@ -722,17 +736,17 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <section id="home" class="tab-panel {'active' if active_tab == 'home' else ''}">
       <div class="panel top-actions">
         <div>
-          <form action="/upload?vehicle={vehicle_param()}" method="post" enctype="multipart/form-data">
+          <form action="/upload?vehicle={vehicle_param(vehicle)}" method="post" enctype="multipart/form-data">
             <input type="file" name="files" accept=".csv" multiple>
-            <button type="submit">Upload CSV Files to {html.escape(active_vehicle())}</button>
+            <button type="submit">Upload CSV Files to {html.escape(vehicle)}</button>
           </form>
         </div>
         <div>
-          {source_delete_form_html()}
+          {source_delete_form_html(vehicle)}
         </div>
         <div>
-          <a class="button" href="/?tab=excel-editor&vehicle={vehicle_param()}">Edit Excel File</a>
-          <form action="/refresh-totals?vehicle={vehicle_param()}" method="post" class="inline-action">
+          <a class="button" href="/?tab=excel-editor&vehicle={vehicle_param(vehicle)}">Edit Excel File</a>
+          <form action="/refresh-totals?vehicle={vehicle_param(vehicle)}" method="post" class="inline-action">
             <button type="submit">Refresh Totals</button>
           </form>
         </div>
@@ -740,22 +754,22 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     </section>
     <section id="excel-editor" class="tab-panel {'active' if active_tab == 'excel-editor' else ''}">
       <div class="panel">
-        <h2>Edit Excel File - {html.escape(active_vehicle())}</h2>
-        {browser_editor_html(tracker_rows)}
+        <h2>Edit Excel File - {html.escape(vehicle)}</h2>
+        {browser_editor_html(tracker_rows, vehicle)}
       </div>
     </section>
     <section id="csv-list" class="tab-panel {'active' if active_tab == 'csv-list' else ''}">
       <div class="panel">
-        <h2>CSV files list - {html.escape(active_vehicle())}</h2>
+        <h2>CSV files list - {html.escape(vehicle)}</h2>
         <div class="muted">Only CSV files uploaded for the selected vehicle are shown here.</div>
-        <div class="downloads"><a class="button" href="/download-uploaded-csv-list?vehicle={vehicle_param()}">Download Uploaded CSV List</a></div>
-        <div class="table-wrap">{csv_files_table_html(tracker_rows, active_vehicle(), selected_source)}</div>
+        <div class="downloads"><a class="button" href="/download-uploaded-csv-list?vehicle={vehicle_param(vehicle)}">Download Uploaded CSV List</a></div>
+        <div class="table-wrap">{csv_files_table_html(tracker_rows, vehicle, selected_source)}</div>
       </div>
     </section>
     <section id="progress" class="tab-panel {'active' if active_tab == 'progress' else ''}">
       <div class="panel">
-        <h2>Progress - {html.escape(active_vehicle())}</h2>
-        <form action="/settings/planned-hours?vehicle={vehicle_param()}" method="post" class="inline-action">
+        <h2>Progress - {html.escape(vehicle)}</h2>
+        <form action="/settings/planned-hours?vehicle={vehicle_param(vehicle)}" method="post" class="inline-action">
           <label>Total planned hours
             <input type="text" name="total_planned_hours" value="{planned_hours:g}">
           </label>
@@ -794,14 +808,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
-        if query.get("vehicle"):
-            vehicle = query.get("vehicle", ["Default"])[0].strip() or "Default"
-            set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+        vehicle = normalize_vehicle(query.get("vehicle", [active_vehicle()])[0])
         active_tab = query.get("tab", ["home"])[0]
         selected_source = query.get("source", [""])[0]
         if parsed.path == "/download":
-            target = active_tracker_path()
-            rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=active_vehicle())
+            target = tracker_path_for_vehicle(vehicle)
+            rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=vehicle)
             if not target.exists():
                 self.send_error(404, "File not found")
                 return
@@ -814,8 +826,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if parsed.path == "/download-uploaded-csv-list":
-            data = uploaded_csv_list_bytes(active_vehicle())
-            filename = f"uploaded_csv_files_{active_vehicle()}.csv"
+            data = uploaded_csv_list_bytes(vehicle)
+            filename = f"uploaded_csv_files_{vehicle}.csv"
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -825,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/download-uploaded-csv":
             source = query.get("source", [""])[0]
-            stored = load_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), source)
+            stored = load_uploaded_csv_file(OUTPUT_DIR, vehicle, source)
             if not stored:
                 self.send_error(404, "Uploaded CSV not found")
                 return
@@ -838,8 +850,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if parsed.path == "/open-excel":
-            target = active_tracker_path()
-            rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=active_vehicle())
+            target = tracker_path_for_vehicle(vehicle)
+            rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=vehicle)
             if not target.exists():
                 self.send_error(404, "File not found")
                 return
@@ -854,25 +866,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 os.startfile(target)
-                self.respond_html(page("Opened Daily Tracker in Excel."))
+                self.respond_html(page("Opened Daily Tracker in Excel.", vehicle=vehicle))
             except Exception as exc:
-                self.respond_html(page(f"Could not open Excel file: {exc}"), status=500)
+                self.respond_html(page(f"Could not open Excel file: {exc}", vehicle=vehicle), status=500)
             return
-        self.respond_html(page(active_tab=active_tab, selected_source=selected_source))
+        self.respond_html(page(active_tab=active_tab, selected_source=selected_source, vehicle=vehicle))
 
     def do_POST(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
-        if query.get("vehicle"):
-            vehicle = query.get("vehicle", ["Default"])[0].strip() or "Default"
-            set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+        vehicle = normalize_vehicle(query.get("vehicle", [active_vehicle()])[0])
         request_path = parsed.path
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         try:
             if request_path == "/upload":
                 csv_paths = parse_multipart(body, self.headers.get("Content-Type", ""))
-                result = process_csv_paths(csv_paths)
+                result = process_csv_paths(csv_paths, vehicle=vehicle)
                 processed = result["processed"]
                 skipped = result["skipped"]
                 message = result["message"]
@@ -880,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
                 active_tab = "home"
             elif request_path == "/upload-anyway":
                 staging = UPLOAD_DIR / "_last_batch"
-                result = process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=True, vehicle=active_vehicle())
+                result = process_reports(staging, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, allow_partial=True, vehicle=vehicle)
                 processed = result["processed"]
                 skipped = result["skipped"]
                 message = "Processed with missing fields left blank. " + result["message"]
@@ -890,7 +900,7 @@ class Handler(BaseHTTPRequestHandler):
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 folder = Path(form.get("folder", [str(DEFAULT_DOWNLOADS)])[0])
                 allow_partial = form.get("allow_partial", ["0"])[0] == "1"
-                result = process_reports(folder, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=allow_partial, vehicle=active_vehicle())
+                result = process_reports(folder, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, allow_partial=allow_partial, vehicle=vehicle)
                 processed = result["processed"]
                 skipped = result["skipped"]
                 prefix = "Processed with missing fields left blank. " if allow_partial else ""
@@ -901,9 +911,9 @@ class Handler(BaseHTTPRequestHandler):
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
                 row = row_from_form(form)
-                row["Vehicle"] = active_vehicle()
+                row["Vehicle"] = vehicle
                 update_database_row(OUTPUT_DIR, row_id, row)
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = "Row updated and saved to the tracker database."
@@ -913,7 +923,7 @@ class Handler(BaseHTTPRequestHandler):
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row_id = form.get("row_id", [""])[0]
                 delete_database_row(OUTPUT_DIR, row_id)
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = "Row deleted from the tracker database."
@@ -922,23 +932,23 @@ class Handler(BaseHTTPRequestHandler):
             elif request_path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row = row_from_form(form)
-                row["Vehicle"] = active_vehicle()
+                row["Vehicle"] = vehicle
                 add_database_row(OUTPUT_DIR, row)
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = "Row added to the tracker database."
                 pending_folder = ""
                 active_tab = "excel-editor"
             elif request_path == "/sync-excel":
-                rows = import_tracker_workbook(OUTPUT_DIR, active_tracker_path(), vehicle=active_vehicle())
+                rows = import_tracker_workbook(OUTPUT_DIR, tracker_path_for_vehicle(vehicle), vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = f"Synced {len(rows)} Excel row(s) to the tracker database. If Excel is open locally, save and close it before syncing again to rewrite recalculated totals into the workbook."
                 pending_folder = ""
                 active_tab = "excel-editor"
             elif request_path == "/refresh-totals":
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = "Totals refreshed from stored database rows. No uploaded CSV data was changed."
@@ -947,8 +957,8 @@ class Handler(BaseHTTPRequestHandler):
             elif request_path == "/delete-csv":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 selected_sources = form.get("source_file", [])
-                deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=active_vehicle())
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+                deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=vehicle)
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 if selected_sources:
@@ -964,7 +974,7 @@ class Handler(BaseHTTPRequestHandler):
                     planned_hours = float(raw_value)
                     if planned_hours < 0:
                         raise ValueError
-                    set_setting(OUTPUT_DIR, vehicle_setting_key(active_vehicle(), "total_planned_hours"), planned_hours)
+                    set_setting(OUTPUT_DIR, vehicle_setting_key(vehicle, "total_planned_hours"), planned_hours)
                     message = f"Total planned hours updated to {planned_hours:g}."
                 except ValueError:
                     message = "Please enter a valid non-negative planned hours value."
@@ -974,9 +984,8 @@ class Handler(BaseHTTPRequestHandler):
                 active_tab = "progress"
             elif request_path == "/vehicle/select":
                 form = parse_qs(body.decode("utf-8", "ignore"))
-                vehicle = form.get("vehicle", ["Default"])[0].strip() or "Default"
-                set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
-                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=vehicle)
+                vehicle = normalize_vehicle(form.get("vehicle", ["Default"])[0])
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                 processed = []
                 skipped = []
                 message = f"Switched to vehicle: {vehicle}."
@@ -986,10 +995,10 @@ class Handler(BaseHTTPRequestHandler):
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 vehicle = form.get("vehicle", [""])[0].strip()
                 if vehicle:
+                    vehicle = normalize_vehicle(vehicle)
                     add_vehicle(OUTPUT_DIR, vehicle)
-                    set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
                     set_setting(OUTPUT_DIR, vehicle_setting_key(vehicle, "total_planned_hours"), DEFAULT_TOTAL_PLANNED_HOURS)
-                    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=vehicle)
+                    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                     message = f"Added and switched to vehicle: {vehicle}."
                 else:
                     message = "Please enter a vehicle name."
@@ -999,11 +1008,11 @@ class Handler(BaseHTTPRequestHandler):
                 active_tab = "home"
             elif request_path == "/vehicle/remove":
                 form = parse_qs(body.decode("utf-8", "ignore"))
-                vehicle = form.get("vehicle", [active_vehicle()])[0].strip()
+                vehicle = normalize_vehicle(form.get("vehicle", [vehicle])[0])
                 if vehicle and vehicle != "Default":
                     deleted = remove_vehicle(OUTPUT_DIR, vehicle)
-                    set_setting(OUTPUT_DIR, "active_vehicle", "Default")
-                    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle="Default")
+                    vehicle = "Default"
+                    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
                     message = f"Removed vehicle '{vehicle}' and deleted {deleted} row(s). Switched back to Default."
                 else:
                     message = "Default vehicle cannot be removed."
@@ -1014,9 +1023,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "Not found")
                 return
-            self.respond_html(page(message, processed, skipped, pending_folder=pending_folder, active_tab=active_tab))
+            self.respond_html(page(message, processed, skipped, pending_folder=pending_folder, active_tab=active_tab, vehicle=vehicle))
         except Exception as exc:
-            self.respond_html(page(f"Could not process reports: {exc}"), status=500)
+            self.respond_html(page(f"Could not process reports: {exc}", vehicle=vehicle), status=500)
 
     def log_message(self, format, *args):
         print(format % args)

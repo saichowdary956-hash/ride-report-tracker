@@ -18,10 +18,10 @@ from ride_report_app import (
     OUTPUT_DIR,
     UPLOAD_DIR,
     DEFAULT_TOTAL_PLANNED_HOURS,
-    active_tracker_path,
-    active_vehicle,
+    normalize_vehicle,
     page,
     row_from_form,
+    tracker_path_for_vehicle,
     vehicle_setting_key,
 )
 from ride_report_tool import (
@@ -86,36 +86,33 @@ def handle_error(exc):
     return setup_error_page(exc)
 
 
-@app.before_request
-def capture_selected_vehicle():
-    vehicle = (request.values.get("vehicle") or "").strip()
-    if vehicle:
-        set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
-
-
 def form_lists():
     return {key: request.form.getlist(key) for key in request.form.keys()}
 
 
-def render_app(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source=""):
-    return page(message, processed or [], skipped or [], pending_folder=pending_folder, active_tab=active_tab, selected_source=selected_source)
+def request_vehicle(default="Default"):
+    return normalize_vehicle(request.values.get("vehicle") or default)
+
+
+def render_app(message="", processed=None, skipped=None, pending_folder="", active_tab="home", selected_source="", vehicle=None):
+    return page(message, processed or [], skipped or [], pending_folder=pending_folder, active_tab=active_tab, selected_source=selected_source, vehicle=vehicle or request_vehicle())
 
 
 @app.get("/")
 def home():
-    vehicle = request.args.get("vehicle", "").strip()
-    if vehicle:
-        set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
+    vehicle = request_vehicle()
     return render_app(
         active_tab=request.args.get("tab", "home"),
         selected_source=request.args.get("source", ""),
+        vehicle=vehicle,
     )
 
 
 @app.get("/download")
 def download():
-    target = active_tracker_path()
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=active_vehicle())
+    vehicle = request_vehicle()
+    target = tracker_path_for_vehicle(vehicle)
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=target.name, vehicle=vehicle)
     return send_file(target, as_attachment=True, download_name=target.name)
 
 
@@ -124,20 +121,22 @@ def download_uploaded_csv_list():
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Vehicle", "CSV File", "Uploaded At", "Updated At"])
-    for item in uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=active_vehicle()):
+    vehicle = request_vehicle()
+    for item in uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=vehicle):
         writer.writerow([item.get("vehicle", ""), item.get("source_file", ""), item.get("uploaded_at", ""), item.get("updated_at", "")])
     data = output.getvalue().encode("utf-8-sig")
     return app.response_class(
         data,
         mimetype="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="uploaded_csv_files_{active_vehicle()}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="uploaded_csv_files_{vehicle}.csv"'},
     )
 
 
 @app.get("/download-uploaded-csv")
 def download_uploaded_csv():
     source = request.args.get("source", "")
-    stored = load_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), source)
+    vehicle = request_vehicle()
+    stored = load_uploaded_csv_file(OUTPUT_DIR, vehicle, source)
     if not stored:
         return "Uploaded CSV not found", 404
     filename, data = stored
@@ -155,6 +154,7 @@ def open_excel():
 
 @app.post("/upload")
 def upload():
+    vehicle = request_vehicle()
     staging = UPLOAD_DIR / "_last_batch"
     staging.mkdir(parents=True, exist_ok=True)
     for old_file in staging.glob("*.csv"):
@@ -164,99 +164,107 @@ def upload():
         if uploaded and uploaded.filename.lower().endswith(".csv"):
             target = staging / Path(uploaded.filename).name
             uploaded.save(target)
-            save_uploaded_csv_file(OUTPUT_DIR, active_vehicle(), target.name, target.read_bytes())
+            save_uploaded_csv_file(OUTPUT_DIR, vehicle, target.name, target.read_bytes())
             csv_paths.append(target)
     if not csv_paths:
-        return render_app("No CSV files were received. Please choose one or more .csv files.", active_tab="home")
-    result = process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
-    return render_app(result["message"], result["processed"], result["skipped"], active_tab="home")
+        return render_app("No CSV files were received. Please choose one or more .csv files.", active_tab="home", vehicle=vehicle)
+    result = process_reports(staging, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app(result["message"], result["processed"], result["skipped"], active_tab="home", vehicle=vehicle)
 
 
 @app.post("/upload-anyway")
 def upload_anyway():
+    vehicle = request_vehicle()
     staging = UPLOAD_DIR / "_last_batch"
-    result = process_reports(staging, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=True, vehicle=active_vehicle())
-    return render_app("Processed with missing fields left blank. " + result["message"], result["processed"], result["skipped"], active_tab="home")
+    result = process_reports(staging, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, allow_partial=True, vehicle=vehicle)
+    return render_app("Processed with missing fields left blank. " + result["message"], result["processed"], result["skipped"], active_tab="home", vehicle=vehicle)
 
 
 @app.post("/folder")
 def folder():
+    vehicle = request_vehicle()
     form = form_lists()
     folder_path = Path(form.get("folder", [str(DEFAULT_DOWNLOADS)])[0])
     allow_partial = form.get("allow_partial", ["0"])[0] == "1"
-    result = process_reports(folder_path, OUTPUT_DIR, tracker_name=active_tracker_path().name, allow_partial=allow_partial, vehicle=active_vehicle())
+    result = process_reports(folder_path, OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, allow_partial=allow_partial, vehicle=vehicle)
     prefix = "Processed with missing fields left blank. " if allow_partial else ""
-    return render_app(prefix + result["message"] + f" Source: {folder_path}.", result["processed"], result["skipped"], pending_folder=str(folder_path), active_tab="home")
+    return render_app(prefix + result["message"] + f" Source: {folder_path}.", result["processed"], result["skipped"], pending_folder=str(folder_path), active_tab="home", vehicle=vehicle)
 
 
 @app.post("/row/update")
 def row_update():
+    vehicle = request_vehicle()
     form = form_lists()
     row = row_from_form(form)
-    row["Vehicle"] = active_vehicle()
+    row["Vehicle"] = vehicle
     update_database_row(OUTPUT_DIR, form.get("row_id", [""])[0], row)
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
-    return render_app("Row updated and saved to the tracker database.", active_tab="excel-editor")
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app("Row updated and saved to the tracker database.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/row/delete")
 def row_delete():
+    vehicle = request_vehicle()
     form = form_lists()
     delete_database_row(OUTPUT_DIR, form.get("row_id", [""])[0])
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
-    return render_app("Row deleted from the tracker database.", active_tab="excel-editor")
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app("Row deleted from the tracker database.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/row/add")
 def row_add():
+    vehicle = request_vehicle()
     row = row_from_form(form_lists())
-    row["Vehicle"] = active_vehicle()
+    row["Vehicle"] = vehicle
     add_database_row(OUTPUT_DIR, row)
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
-    return render_app("Row added to the tracker database.", active_tab="excel-editor")
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app("Row added to the tracker database.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/sync-excel")
 def sync_excel():
-    rows = import_tracker_workbook(OUTPUT_DIR, active_tracker_path(), vehicle=active_vehicle())
-    return render_app(f"Synced {len(rows)} Excel row(s) to the tracker database.", active_tab="excel-editor")
+    vehicle = request_vehicle()
+    rows = import_tracker_workbook(OUTPUT_DIR, tracker_path_for_vehicle(vehicle), vehicle=vehicle)
+    return render_app(f"Synced {len(rows)} Excel row(s) to the tracker database.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/refresh-totals")
 def refresh_totals():
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
-    return render_app("Totals refreshed from stored database rows. No uploaded CSV data was changed.", active_tab="excel-editor")
+    vehicle = request_vehicle()
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app("Totals refreshed from stored database rows. No uploaded CSV data was changed.", active_tab="excel-editor", vehicle=vehicle)
 
 
 @app.post("/delete-csv")
 def delete_csv():
+    vehicle = request_vehicle()
     selected_sources = request.form.getlist("source_file")
-    deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=active_vehicle())
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=active_vehicle())
+    deleted = delete_database_rows_by_source_files(OUTPUT_DIR, selected_sources, vehicle=vehicle)
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
     message = f"Deleted {deleted} Daily Tracker row(s) from selected CSV file(s)." if selected_sources else "No CSV files selected for deletion."
-    return render_app(message, active_tab="home")
+    return render_app(message, active_tab="home", vehicle=vehicle)
 
 
 @app.post("/settings/planned-hours")
 def planned_hours():
+    vehicle = request_vehicle()
     raw_value = request.form.get("total_planned_hours", str(DEFAULT_TOTAL_PLANNED_HOURS)).strip()
     try:
         planned = float(raw_value)
         if planned < 0:
             raise ValueError
-        set_setting(OUTPUT_DIR, vehicle_setting_key(active_vehicle(), "total_planned_hours"), planned)
+        set_setting(OUTPUT_DIR, vehicle_setting_key(vehicle, "total_planned_hours"), planned)
         message = f"Total planned hours updated to {planned:g}."
     except ValueError:
         message = "Please enter a valid non-negative planned hours value."
-    return render_app(message, active_tab="progress")
+    return render_app(message, active_tab="progress", vehicle=vehicle)
 
 
 @app.post("/vehicle/select")
 def vehicle_select():
-    vehicle = request.form.get("vehicle", "Default").strip() or "Default"
-    set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
-    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=vehicle)
-    return render_app(f"Switched to vehicle: {vehicle}.", active_tab="home")
+    vehicle = request_vehicle()
+    rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+    return render_app(f"Switched to vehicle: {vehicle}.", active_tab="home", vehicle=vehicle)
 
 
 @app.post("/vehicle/add")
@@ -264,13 +272,12 @@ def vehicle_add():
     vehicle = request.form.get("vehicle", "").strip()
     if vehicle:
         add_vehicle(OUTPUT_DIR, vehicle)
-        set_setting(OUTPUT_DIR, "active_vehicle", vehicle)
         set_setting(OUTPUT_DIR, vehicle_setting_key(vehicle, "total_planned_hours"), DEFAULT_TOTAL_PLANNED_HOURS)
-        rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle=vehicle)
+        rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
         message = f"Added and switched to vehicle: {vehicle}."
     else:
         message = "Please enter a vehicle name."
-    return render_app(message, active_tab="home")
+    return render_app(message, active_tab="home", vehicle=vehicle or "Default")
 
 
 @app.post("/vehicle/remove")
@@ -278,9 +285,8 @@ def vehicle_remove():
     vehicle = request.form.get("vehicle", active_vehicle()).strip()
     if vehicle and vehicle != "Default":
         deleted = remove_vehicle(OUTPUT_DIR, vehicle)
-        set_setting(OUTPUT_DIR, "active_vehicle", "Default")
-        rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=active_tracker_path().name, vehicle="Default")
+        rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle("Default").name, vehicle="Default")
         message = f"Removed vehicle '{vehicle}' and deleted {deleted} row(s). Switched back to Default."
     else:
         message = "Default vehicle cannot be removed."
-    return render_app(message, active_tab="home")
+    return render_app(message, active_tab="home", vehicle="Default" if vehicle != "Default" else vehicle)
