@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PackageName = "RideReport_Offline_App"
+$PackageName = "RideReport_Desktop_App"
 $Dist = Join-Path $Root "dist"
 $PackageDir = Join-Path $Dist $PackageName
 $ZipPath = Join-Path $Dist "$PackageName.zip"
