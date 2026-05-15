@@ -20,7 +20,9 @@ from ride_report_tool import (
     delete_database_row,
     delete_database_rows_by_source_files,
     database_fallback_reason,
+    excel_files_from_database,
     import_tracker_workbook,
+    load_excel_file,
     load_rows_from_database,
     process_reports,
     rebuild_tracker_from_database,
@@ -157,6 +159,62 @@ def uploaded_csv_list_bytes(vehicle):
     for item in uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=vehicle):
         writer.writerow([item.get("vehicle", ""), item.get("source_file", ""), item.get("uploaded_at", ""), item.get("updated_at", "")])
     return output.getvalue().encode("utf-8-sig")
+
+
+def file_storage_html(vehicle=None):
+    vehicle = normalize_vehicle(vehicle or active_vehicle())
+    csv_files = uploaded_csv_files_from_database(OUTPUT_DIR, vehicle=vehicle)
+    excel_files = excel_files_from_database(OUTPUT_DIR, vehicle=vehicle)
+    csv_rows = []
+    for item in csv_files:
+        source = str(item.get("source_file") or "")
+        csv_rows.append(
+            "<tr>"
+            f"<td>{html.escape(source)}</td>"
+            f"<td>{html.escape(str(item.get('uploaded_at') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('updated_at') or ''))}</td>"
+            f"<td><a class='button' href='/download-uploaded-csv?vehicle={vehicle_param(vehicle)}&source={quote_plus(source)}'>Download</a></td>"
+            "</tr>"
+        )
+    excel_rows = []
+    for item in excel_files:
+        file_name = str(item.get("file_name") or "")
+        excel_rows.append(
+            "<tr>"
+            f"<td>{html.escape(file_name)}</td>"
+            f"<td>{html.escape(str(item.get('created_at') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('updated_at') or ''))}</td>"
+            f"<td><a class='button' href='/download-stored-excel?vehicle={vehicle_param(vehicle)}&file={quote_plus(file_name)}'>Download</a></td>"
+            "</tr>"
+        )
+    csv_table = (
+        "<table><thead><tr><th>CSV File</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>"
+        + "".join(csv_rows)
+        + "</tbody></table>"
+        if csv_rows
+        else "<p class='empty'>No CSV files stored for this vehicle.</p>"
+    )
+    excel_table = (
+        "<table><thead><tr><th>Excel File</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>"
+        + "".join(excel_rows)
+        + "</tbody></table>"
+        if excel_rows
+        else "<p class='empty'>No Excel workbook stored for this vehicle yet.</p>"
+    )
+    return f"""
+    <div class="storage-grid">
+      <div>
+        <h3>CSV Files</h3>
+        <div class="muted">Folder: /{html.escape(vehicle)}/csv</div>
+        <div class="table-wrap">{csv_table}</div>
+      </div>
+      <div>
+        <h3>Excel Files</h3>
+        <div class="muted">Folder: /{html.escape(vehicle)}/excel</div>
+        <div class="table-wrap">{excel_table}</div>
+      </div>
+    </div>
+    """
 
 
 def parse_multipart(body, content_type):
@@ -506,7 +564,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     skipped = skipped or []
     tracker_rows = current_rows(vehicle)
     planned_hours = current_planned_hours(vehicle)
-    active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress", "charts"} else "home"
+    active_tab = active_tab if active_tab in {"home", "excel-editor", "csv-list", "progress", "charts", "storage"} else "home"
     skipped_cards = "".join(
         f"<li><strong>{html.escape(item.get('file', ''))}</strong> {html.escape(item.get('message', ''))}</li>"
         for item in skipped
@@ -747,6 +805,8 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     .csv-detail.active {{ display: block; }}
     .csv-actions {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0 12px; }}
     .csv-actions form {{ margin: 0; }}
+    .storage-grid {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }}
+    .storage-grid h3 {{ margin: 0 0 8px; font-size: 15px; }}
     .chart-summary {{ display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: center; }}
     .donut {{
       width: 190px;
@@ -809,6 +869,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       .grid {{ grid-template-columns: 1fr; }}
       .day-columns {{ grid-template-columns: 1fr; }}
       .csv-file-layout {{ grid-template-columns: 1fr; }}
+      .storage-grid {{ grid-template-columns: 1fr; }}
       .chart-summary {{ grid-template-columns: 1fr; }}
       .chart-stats {{ grid-template-columns: 1fr; }}
       .chart-row {{ grid-template-columns: 1fr; }}
@@ -823,6 +884,7 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     <nav class="tabs">
       <a class="tab-button {'active' if active_tab == 'home' else ''}" href="/?tab=home&vehicle={vehicle_param(vehicle)}">Home</a>
       <a class="tab-button {'active' if active_tab == 'csv-list' else ''}" href="/?tab=csv-list&vehicle={vehicle_param(vehicle)}">CSV Files</a>
+      <a class="tab-button {'active' if active_tab == 'storage' else ''}" href="/?tab=storage&vehicle={vehicle_param(vehicle)}">File Storage</a>
       <a class="tab-button {'active' if active_tab == 'progress' else ''}" href="/?tab=progress&vehicle={vehicle_param(vehicle)}">Progress</a>
       <a class="tab-button {'active' if active_tab == 'charts' else ''}" href="/?tab=charts&vehicle={vehicle_param(vehicle)}">Charts</a>
     </nav>
@@ -870,6 +932,13 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
         </form>
         <div class="muted">Category percentages remain fixed. Planned and remaining hours recalculate from this value.</div>
         <div class="table-wrap">{progress_table_html(tracker_rows, planned_hours)}</div>
+      </div>
+    </section>
+    <section id="storage" class="tab-panel {'active' if active_tab == 'storage' else ''}">
+      <div class="panel">
+        <h2>File Storage - {html.escape(vehicle)}</h2>
+        <div class="muted">Files shown here are stored in the configured database for the selected vehicle.</div>
+        {file_storage_html(vehicle)}
       </div>
     </section>
     <section id="charts" class="tab-panel {'active' if active_tab == 'charts' else ''}">
@@ -951,6 +1020,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if parsed.path == "/download-stored-excel":
+            file_name = query.get("file", [""])[0]
+            stored = load_excel_file(OUTPUT_DIR, vehicle, file_name)
+            if not stored:
+                self.send_error(404, "Stored Excel file not found")
+                return
+            filename, data = stored
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="{dated_excel_filename(filename)}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

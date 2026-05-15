@@ -486,6 +486,18 @@ def upsert_uploaded_csv_sql():
     """
 
 
+def upsert_excel_file_sql():
+    return """
+        INSERT INTO excel_files (id, vehicle, file_name, content_bytes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            vehicle = excluded.vehicle,
+            file_name = excluded.file_name,
+            content_bytes = excluded.content_bytes,
+            updated_at = excluded.updated_at
+    """
+
+
 class PostgresConnection:
     def __init__(self, conn):
         self.conn = conn
@@ -574,6 +586,19 @@ def connect_postgres_tracker_db():
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS excel_files (
+            id TEXT PRIMARY KEY,
+            vehicle TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_bytes BYTEA NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(vehicle, file_name)
+        )
+        """
+    )
+    db.execute(
+        """
         UPDATE daily_rows
         SET
             vehicle = COALESCE(NULLIF(vehicle, ''), COALESCE(NULLIF(data_json::jsonb ->> 'Vehicle', ''), 'Default')),
@@ -588,6 +613,8 @@ def connect_postgres_tracker_db():
     db.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_vehicle_source ON uploaded_csv_files (vehicle, source_file)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_uploaded_at ON uploaded_csv_files (uploaded_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_excel_files_vehicle_name ON excel_files (vehicle, file_name)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_excel_files_updated_at ON excel_files (updated_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     db.commit()
     return db
@@ -663,6 +690,19 @@ def connect_tracker_db(output_dir):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS excel_files (
+            id TEXT PRIMARY KEY,
+            vehicle TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_bytes BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(vehicle, file_name)
+        )
+        """
+    )
     for item in conn.execute("SELECT id, data_json FROM daily_rows WHERE vehicle IS NULL OR vehicle = '' OR source_file IS NULL OR source_file = '' OR drive_id IS NULL OR drive_id = ''").fetchall():
         data = json.loads(item["data_json"])
         conn.execute(
@@ -675,6 +715,8 @@ def connect_tracker_db(output_dir):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_rows_vehicle_drive ON daily_rows (vehicle, drive_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_vehicle_source ON uploaded_csv_files (vehicle, source_file)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_csv_uploaded_at ON uploaded_csv_files (uploaded_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_excel_files_vehicle_name ON excel_files (vehicle, file_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_excel_files_updated_at ON excel_files (updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at)")
     conn.commit()
     return conn
@@ -783,6 +825,10 @@ def uploaded_csv_id(vehicle, source_file):
     return f"{str(vehicle or 'Default').strip() or 'Default'}::{str(source_file or '').strip()}"
 
 
+def excel_file_id(vehicle, file_name):
+    return f"{str(vehicle or 'Default').strip() or 'Default'}::{str(file_name or '').strip()}"
+
+
 def save_uploaded_csv_file(output_dir, vehicle, source_file, content_bytes):
     vehicle = str(vehicle or "Default").strip() or "Default"
     source_file = str(source_file or "").strip()
@@ -812,6 +858,49 @@ def load_uploaded_csv_file(output_dir, vehicle, source_file):
     if not row:
         return None
     return row["source_file"], bytes(row["content_bytes"])
+
+
+def save_excel_file(output_dir, vehicle, file_name, content_bytes):
+    vehicle = str(vehicle or "Default").strip() or "Default"
+    file_name = str(file_name or "daily_tracker.xlsx").strip()
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect_tracker_db(output_dir) as conn:
+        current = conn.execute("SELECT created_at FROM excel_files WHERE id = ?", (excel_file_id(vehicle, file_name),)).fetchone()
+        created_at = current["created_at"] if current else now
+        conn.execute(
+            upsert_excel_file_sql(),
+            (excel_file_id(vehicle, file_name), vehicle, file_name, content_bytes, created_at, now),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (action, row_id, detail, created_at) VALUES (?, ?, ?, ?)",
+            ("store-excel-file", excel_file_id(vehicle, file_name), file_name, now),
+        )
+        conn.commit()
+
+
+def load_excel_file(output_dir, vehicle, file_name):
+    with connect_tracker_db(output_dir) as conn:
+        row = conn.execute(
+            "SELECT file_name, content_bytes FROM excel_files WHERE vehicle = ? AND file_name = ?",
+            (vehicle, file_name),
+        ).fetchone()
+    if not row:
+        return None
+    return row["file_name"], bytes(row["content_bytes"])
+
+
+def excel_files_from_database(output_dir, vehicle=None):
+    with connect_tracker_db(output_dir) as conn:
+        if vehicle is None:
+            rows = conn.execute(
+                "SELECT vehicle, file_name, created_at, updated_at FROM excel_files ORDER BY vehicle, file_name"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT vehicle, file_name, created_at, updated_at FROM excel_files WHERE vehicle = ? ORDER BY file_name",
+                (vehicle,),
+            ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def reconstructed_csv_from_rows(output_dir, vehicle, source_file):
@@ -1380,6 +1469,8 @@ def rebuild_tracker_from_database(output_dir, tracker_name="daily_tracker.xlsx",
     backup_file(tracker_path)
     try:
         build_tracker_from_daily_rows(tracker_path, rows)
+        if tracker_path.exists() and vehicle is not None:
+            save_excel_file(output_dir, vehicle, tracker_path.name, tracker_path.read_bytes())
     except PermissionError:
         pass
     return tracker_path
@@ -1902,6 +1993,8 @@ def process_reports(input_path, output_dir, tracker_name="daily_tracker.xlsx", f
     upsert_rows_to_database(output_dir, new_rows, action="process-csv", vehicle=vehicle)
     try:
         build_tracker_from_daily_rows(tracker_path, load_rows_from_database(output_dir, vehicle=vehicle))
+        if tracker_path.exists():
+            save_excel_file(output_dir, vehicle, tracker_path.name, tracker_path.read_bytes())
     except PermissionError:
         pass
     write_process_log(output_dir / "process_log.csv", processed, skipped)

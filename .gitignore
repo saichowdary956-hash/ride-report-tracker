@@ -8,3 +8,4 @@ dist/
 *.sqlite
 *.db
 .env
+neon_database_url.txt

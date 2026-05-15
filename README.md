@@ -32,6 +32,12 @@ python .\ride_report_app.py
 
 When `DATABASE_URL` is present, all vehicle rows, uploaded CSV records, settings, and progress data are stored in PostgreSQL. The app has no built-in CSV count limit per vehicle; storage is limited by your database plan.
 
+## Desktop Launchers
+
+- Use `Start_RideReport_Neon_Cloud.bat` when you want Neon Postgres as the permanent storage unit.
+- Use `Start_RideReport_Offline.bat` only when you want local SQLite storage without internet.
+- The app includes a `File Storage` tab for the selected vehicle, with database-backed CSV and Excel folders.
+
 ## Render Deployment
 
 Fastest link:

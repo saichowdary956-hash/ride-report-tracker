@@ -31,6 +31,7 @@ from ride_report_tool import (
     delete_database_row,
     delete_database_rows_by_source_files,
     import_tracker_workbook,
+    load_excel_file,
     load_uploaded_csv_file,
     reconstructed_csv_from_rows,
     process_reports,
@@ -167,6 +168,21 @@ def download_uploaded_csv():
         data,
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/download-stored-excel")
+def download_stored_excel():
+    vehicle = request_vehicle()
+    file_name = request.args.get("file", "")
+    stored = load_excel_file(OUTPUT_DIR, vehicle, file_name)
+    if not stored:
+        return "Stored Excel file not found", 404
+    filename, data = stored
+    return app.response_class(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{dated_excel_filename(filename)}"'},
     )
 
 

@@ -17,8 +17,12 @@ $Files = @(
   "ride_report_app.py",
   "ride_report_tool.py",
   "Start_RideReport_Offline.bat",
+  "Start_RideReport_Neon_Cloud.bat",
   "offline_requirements.txt",
   "OFFLINE_APP_README.md",
+  "NEON_CLOUD_APP_README.md",
+  "README.md",
+  "requirements.txt",
   "LICENSE"
 )
 
