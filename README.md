@@ -57,4 +57,5 @@ https://render.com/deploy?repo=https://github.com/saichowdary956-hash/ride-repor
 - Select the active vehicle before uploading CSV files.
 - The upload button shows the target vehicle, for example `Upload CSV Files to Jeep`.
 - Excel files are generated from database data. In cloud deployment, download the Excel file instead of trying to open Excel on the server.
+- The generated Excel workbook includes a `Completed So Far` sheet with target percentage, planned hours, completed duration, completed hours, remaining hours, completion percentage, and status for each progress condition.
 - Keep `.env`, `outputs/`, and `uploads/` out of GitHub. They are ignored by `.gitignore`.

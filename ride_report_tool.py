@@ -184,6 +184,7 @@ BURNDOWN_LOOKUP = {
 }
 
 PROJECT_TARGET_HOURS = 295
+DEFAULT_COMPLETED_PROGRESS_HOURS = 300
 DEFAULT_VEHICLE_PREFIX = "C844925"
 
 
@@ -1266,6 +1267,49 @@ def totals_from_daily_rows(rows):
     return totals
 
 
+def planned_hours_for_vehicle(output_dir, vehicle=None, default=DEFAULT_COMPLETED_PROGRESS_HOURS):
+    if not vehicle:
+        return float(default)
+    raw_value = get_setting(output_dir, f"vehicle::{vehicle}::total_planned_hours", str(default))
+    try:
+        planned_hours = float(raw_value)
+    except (TypeError, ValueError):
+        return float(default)
+    return planned_hours if planned_hours >= 0 else float(default)
+
+
+def completed_progress_rows(rows, total_planned_hours=DEFAULT_COMPLETED_PROGRESS_HOURS):
+    field_by_lookup = {
+        (category, label): header
+        for header, category, label in DAILY_TRACKER_COLUMNS
+        if category and label
+    }
+    progress_rows = []
+    for category, condition, percent in BURNDOWN_ROWS:
+        lookup = BURNDOWN_LOOKUP[(category, condition)]
+        field = field_by_lookup.get(lookup, condition)
+        completed_seconds = sum(duration_seconds(row.get(field, "")) for row in rows)
+        completed_hours = round(completed_seconds / 3600, 2)
+        planned_hours = round(total_planned_hours * percent / 100, 2)
+        remaining_hours = round(max(planned_hours - completed_hours, 0), 2)
+        completion_percent = round(min(completed_hours / planned_hours * 100, 100), 1) if planned_hours else 0
+        progress_rows.append(
+            {
+                "Category": category.replace("*", ""),
+                "Condition": condition.replace("*", ""),
+                "Field": field,
+                "Target %": percent,
+                "Planned Hours": planned_hours,
+                "Completed": seconds_to_duration(completed_seconds),
+                "Completed Hours": completed_hours,
+                "Remaining Hours": remaining_hours,
+                "Completion %": completion_percent,
+                "Status": "Complete" if remaining_hours <= 0 else "Pending",
+            }
+        )
+    return progress_rows
+
+
 def sync_database_from_tracker(output_dir, tracker_path, vehicle=None):
     if database_has_rows(output_dir) or not Path(tracker_path).exists():
         return
@@ -1301,7 +1345,11 @@ def import_tracker_workbook(output_dir, tracker_path, action="sync-excel-edits",
     if rows:
         save_rows_to_database(output_dir, rows, action=action, vehicle=vehicle)
         try:
-            build_tracker_from_daily_rows(Path(tracker_path), load_rows_from_database(output_dir, vehicle=vehicle))
+            build_tracker_from_daily_rows(
+                Path(tracker_path),
+                load_rows_from_database(output_dir, vehicle=vehicle),
+                planned_hours_for_vehicle(output_dir, vehicle),
+            )
         except PermissionError:
             pass
     return rows
@@ -1439,24 +1487,99 @@ def write_daily_rows_sheet(workbook, rows):
         sheet.column_dimensions[get_column_letter(column_number)].width = widths.get(column_number, 12)
 
 
-def write_completed_totals_sheet(workbook, rows):
-    sheet = safe_sheet(workbook, "Completed So Far", ["Category", "Field", "Total Completed"])
-    for item in totals_from_daily_rows(rows):
-        sheet.append([item["Category"], item["Field"], item["Total"]])
-    for row in sheet.iter_rows(min_row=2):
-        row[2].number_format = "@"
+def write_completed_totals_sheet(workbook, rows, total_planned_hours=DEFAULT_COMPLETED_PROGRESS_HOURS):
+    headers = [
+        "Category",
+        "Condition",
+        "Daily Tracker Field",
+        "Target %",
+        "Planned Hours",
+        "Completed",
+        "Completed Hours",
+        "Remaining Hours",
+        "Completion %",
+        "Status",
+    ]
+    sheet = safe_sheet(workbook, "Completed So Far", headers)
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = "A2"
+
     for sheet_cell in sheet[1]:
         style_cell(sheet_cell, fill="B6D7A8", bold=True)
-    autofit(sheet)
+
+    for row_number, item in enumerate(completed_progress_rows(rows, total_planned_hours), start=2):
+        values = [
+            item["Category"],
+            item["Condition"],
+            item["Field"],
+            item["Target %"] / 100,
+            item["Planned Hours"],
+            item["Completed"],
+            item["Completed Hours"],
+            item["Remaining Hours"],
+            item["Completion %"] / 100,
+            item["Status"],
+        ]
+        for column_number, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_number, column=column_number, value=value)
+            fill = "DDEBF7" if row_number % 2 == 0 else "E2F0D9"
+            if column_number in (5, 7):
+                fill = "CFE2F3"
+            elif column_number == 8:
+                fill = "F4CCCC" if item["Remaining Hours"] > 0 else "D9EAD3"
+            elif column_number == 10:
+                fill = "D9EAD3" if item["Status"] == "Complete" else "FFF2CC"
+            style_cell(cell, fill=fill, align="left" if column_number <= 3 else "center")
+            if column_number in (4, 9):
+                cell.number_format = "0.0%"
+            elif column_number in (5, 7, 8):
+                cell.number_format = "0.00"
+            elif column_number == 6:
+                cell.number_format = "@"
+
+    total_row = len(BURNDOWN_ROWS) + 3
+    completed_hours = round(sum(parse_duration(row.get("Overall Session Time", "")).total_seconds() for row in rows) / 3600, 2)
+    summary_values = [
+        ("Total Planned Hours", total_planned_hours),
+        ("Total Session Completed Hours", completed_hours),
+        ("Total Remaining Hours", round(max(total_planned_hours - completed_hours, 0), 2)),
+        ("Overall Completion %", round(min(completed_hours / total_planned_hours, 1), 4) if total_planned_hours else 0),
+    ]
+    for offset, (label, value) in enumerate(summary_values):
+        row_number = total_row + offset
+        sheet.cell(row=row_number, column=1, value=label)
+        sheet.cell(row=row_number, column=2, value=value)
+        style_cell(sheet.cell(row=row_number, column=1), fill="D9EAD3", bold=True, align="left")
+        style_cell(sheet.cell(row=row_number, column=2), fill="D9EAD3", bold=True)
+        if label.endswith("%"):
+            sheet.cell(row=row_number, column=2).number_format = "0.0%"
+        else:
+            sheet.cell(row=row_number, column=2).number_format = "0.00"
+
+    sheet.auto_filter.ref = f"A1:J{len(BURNDOWN_ROWS) + 1}"
+    widths = {
+        1: 14,
+        2: 30,
+        3: 24,
+        4: 12,
+        5: 15,
+        6: 16,
+        7: 16,
+        8: 16,
+        9: 14,
+        10: 12,
+    }
+    for column_number, width in widths.items():
+        sheet.column_dimensions[get_column_letter(column_number)].width = width
 
 
-def build_tracker_from_daily_rows(tracker_path, rows):
+def build_tracker_from_daily_rows(tracker_path, rows, total_planned_hours=DEFAULT_COMPLETED_PROGRESS_HOURS):
     tracker_path = Path(tracker_path)
     tracker_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     workbook.remove(workbook.active)
     write_daily_rows_sheet(workbook, rows)
-    write_completed_totals_sheet(workbook, rows)
+    write_completed_totals_sheet(workbook, rows, total_planned_hours)
     workbook.save(tracker_path)
 
 
@@ -1466,9 +1589,10 @@ def rebuild_tracker_from_database(output_dir, tracker_name="daily_tracker.xlsx",
         cleanup_vehicle_rows_for_uploaded_csvs(output_dir, vehicle)
     rows = load_rows_from_database(output_dir, vehicle=vehicle)
     tracker_path = output_dir / tracker_name
+    total_planned_hours = planned_hours_for_vehicle(output_dir, vehicle)
     backup_file(tracker_path)
     try:
-        build_tracker_from_daily_rows(tracker_path, rows)
+        build_tracker_from_daily_rows(tracker_path, rows, total_planned_hours)
         if tracker_path.exists() and vehicle is not None:
             save_excel_file(output_dir, vehicle, tracker_path.name, tracker_path.read_bytes())
     except PermissionError:
@@ -1992,7 +2116,11 @@ def process_reports(input_path, output_dir, tracker_name="daily_tracker.xlsx", f
 
     upsert_rows_to_database(output_dir, new_rows, action="process-csv", vehicle=vehicle)
     try:
-        build_tracker_from_daily_rows(tracker_path, load_rows_from_database(output_dir, vehicle=vehicle))
+        build_tracker_from_daily_rows(
+            tracker_path,
+            load_rows_from_database(output_dir, vehicle=vehicle),
+            planned_hours_for_vehicle(output_dir, vehicle),
+        )
         if tracker_path.exists():
             save_excel_file(output_dir, vehicle, tracker_path.name, tracker_path.read_bytes())
     except PermissionError:

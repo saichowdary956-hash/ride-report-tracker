@@ -240,23 +240,37 @@ def parse_multipart(body, content_type):
     return files
 
 
-def tracker_table_html(rows, vehicle=None, return_tab="excel-editor", source=""):
+def tracker_table_html(rows, vehicle=None, return_tab="excel-editor", source="", bulk=False):
     if not rows:
         return "<p class='empty'>No rows yet.</p>"
     headers = [column[0] for column in DAILY_TRACKER_COLUMNS]
-    header = "".join(f"<th>{html.escape(value)}</th>" for value in headers) + "<th>Actions</th>"
+    header = "".join(f"<th>{html.escape(value)}</th>" for value in headers)
+    if not bulk:
+        header += "<th>Actions</th>"
     body_rows = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         row_id = html.escape(str(row.get("_id", "")))
         cells = ""
         for header_name in headers:
             value = html.escape(str(row.get(header_name, "")))
             field_class = "field-drive-id" if header_name == "Drive ID" else ""
+            input_name = f"row_{row_index}__{html.escape(header_name)}" if bulk else html.escape(header_name)
+            input_form = "" if bulk else f' form="edit-{row_id}"'
+            hidden_inputs = ""
+            if bulk and header_name == headers[0]:
+                hidden_inputs = (
+                    f"<input type=\"hidden\" name=\"row_{row_index}__id\" value=\"{row_id}\">"
+                    f"<input type=\"hidden\" name=\"row_{row_index}__source\" value=\"{html.escape(str(row.get('Source File', '')))}\">"
+                )
             cells += (
                 "<td>"
-                f"<input class=\"{field_class}\" form=\"edit-{row_id}\" name=\"{html.escape(header_name)}\" value=\"{value}\">"
+                f"{hidden_inputs}"
+                f"<input class=\"{field_class}\"{input_form} name=\"{input_name}\" value=\"{value}\">"
                 "</td>"
             )
+        if bulk:
+            body_rows.append(f"<tr>{cells}</tr>")
+            continue
         actions = f"""
         <td class="actions">
           <form id="edit-{row_id}" action="/row/update?vehicle={vehicle_param(vehicle)}" method="post">
@@ -271,7 +285,19 @@ def tracker_table_html(rows, vehicle=None, return_tab="excel-editor", source="")
           </form>
         </td>"""
         body_rows.append(f"<tr>{cells}{actions}</tr>")
-    return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+    table = f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+    if not bulk:
+        return table
+    return f"""
+    <form action="/rows/update-all?vehicle={vehicle_param(vehicle)}" method="post" class="bulk-edit-form">
+      <input type="hidden" name="row_count" value="{len(rows)}">
+      <input type="hidden" name="return_tab" value="{html.escape(return_tab)}">
+      <input type="hidden" name="source" value="{html.escape(source)}">
+      <div class="bulk-actions">
+        <button type="submit">Update All</button>
+      </div>
+      {table}
+    </form>"""
 
 
 def preview_table_html(rows):
@@ -317,8 +343,8 @@ def browser_editor_html(rows, vehicle=None):
     <div class="editor-actions">
       <a class="button" href="/download?vehicle={vehicle_param(vehicle)}">Download Excel Copy</a>
     </div>
-    <div class="muted">Edit values in the table, then click Update on that row. Changes are saved to the tracker database and the Excel file is regenerated.</div>
-    <div class="table-wrap editor-table">{tracker_table_html(rows, vehicle)}</div>
+    <div class="muted">Edit values in the table, then click Update All. Changes are saved to the tracker database and the Excel file is regenerated for download.</div>
+    <div class="table-wrap editor-table">{tracker_table_html(rows, vehicle, bulk=True)}</div>
     """
 
 
@@ -497,6 +523,28 @@ def row_from_form(form):
     return row
 
 
+def rows_from_bulk_form(form, vehicle=None):
+    rows = []
+    try:
+        row_count = int(form.get("row_count", ["0"])[0])
+    except ValueError:
+        row_count = 0
+    for row_index in range(row_count):
+        row_id = form.get(f"row_{row_index}__id", [""])[0].strip()
+        if not row_id:
+            continue
+        row = {}
+        for header, _, _ in DAILY_TRACKER_COLUMNS:
+            row[header] = form.get(f"row_{row_index}__{header}", [""])[0].strip()
+        if vehicle is not None:
+            row["Vehicle"] = vehicle
+        source_file = form.get(f"row_{row_index}__source", [""])[0].strip()
+        if source_file:
+            row["Source File"] = source_file
+        rows.append((row_id, row, source_file))
+    return rows
+
+
 def source_delete_form_html(vehicle=None):
     vehicle = normalize_vehicle(vehicle or active_vehicle())
     sources = source_files_from_database(OUTPUT_DIR, vehicle=vehicle)
@@ -661,6 +709,18 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
     .editor-actions {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }}
     .editor-actions .inline-action {{ margin-top: 0; }}
     .editor-table {{ max-height: 580px; }}
+    .bulk-edit-form {{ display: block; }}
+    .bulk-actions {{
+      position: sticky;
+      left: 0;
+      top: 0;
+      z-index: 3;
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }}
     .add-row-title {{ margin-top: 18px; }}
     input[type=file], input[type=text], td input, .add-grid input {{
       border: 1px solid var(--line);
@@ -948,18 +1008,6 @@ def page(message="", processed=None, skipped=None, pending_folder="", active_tab
       </div>
     </section>
   </main>
-  <script>
-    const buttons = document.querySelectorAll('.tab-button');
-    const panels = document.querySelectorAll('.tab-panel');
-    buttons.forEach((button) => {{
-      button.addEventListener('click', () => {{
-        buttons.forEach((item) => item.classList.remove('active'));
-        panels.forEach((item) => item.classList.remove('active'));
-        button.classList.add('active');
-        document.getElementById(button.dataset.tab).classList.add('active');
-      }});
-    }});
-  </script>
 </body>
 </html>"""
 
@@ -1124,6 +1172,22 @@ class Handler(BaseHTTPRequestHandler):
                 message = "Row deleted from the tracker database."
                 pending_folder = ""
                 active_tab = "excel-editor"
+            elif request_path == "/rows/update-all":
+                form = parse_qs(body.decode("utf-8", "ignore"))
+                edited_rows = rows_from_bulk_form(form, vehicle)
+                touched_sources = set()
+                for row_id, row, source_file in edited_rows:
+                    update_database_row(OUTPUT_DIR, row_id, row)
+                    if source_file:
+                        touched_sources.add(source_file)
+                for source_file in touched_sources:
+                    refresh_uploaded_csv_from_rows(OUTPUT_DIR, vehicle, source_file)
+                rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
+                processed = []
+                skipped = []
+                message = f"Updated {len(edited_rows)} row(s). The Excel download has been regenerated with your latest edits."
+                pending_folder = ""
+                active_tab = form.get("return_tab", ["excel-editor"])[0] or "excel-editor"
             elif request_path == "/row/add":
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 row = row_from_form(form)
@@ -1204,10 +1268,11 @@ class Handler(BaseHTTPRequestHandler):
                 form = parse_qs(body.decode("utf-8", "ignore"))
                 vehicle = normalize_vehicle(form.get("vehicle", [vehicle])[0])
                 if vehicle and vehicle != "Default":
+                    removed_vehicle = vehicle
                     deleted = remove_vehicle(OUTPUT_DIR, vehicle)
                     vehicle = "Default"
                     rebuild_tracker_from_database(OUTPUT_DIR, tracker_name=tracker_path_for_vehicle(vehicle).name, vehicle=vehicle)
-                    message = f"Removed vehicle '{vehicle}' and deleted {deleted} row(s). Switched back to Default."
+                    message = f"Removed vehicle '{removed_vehicle}' and deleted {deleted} row(s). Switched back to Default."
                 else:
                     message = "Default vehicle cannot be removed."
                 processed = []
